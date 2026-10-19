@@ -12,6 +12,8 @@ release renames it.
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-19
+
 ### Added
 - `aspire deploy` can publish an AppHost to Caravana. Add `builder.PublishToCaravana(name, ...)`
   to the AppHost and the deploy builds and pushes the images as Aspire always does, sends the
