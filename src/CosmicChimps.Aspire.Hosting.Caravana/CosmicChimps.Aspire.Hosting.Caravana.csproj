@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <!-- Aspire pipeline API (PipelineStepAnnotation, PipelineStep, etc.) is experimental -->
-    <NoWarn>$(NoWarn);ASPIREPIPELINES001</NoWarn>
+    <NoWarn>$(NoWarn);ASPIREPIPELINES001;ASPIREPIPELINES004</NoWarn>
 
     <!-- NuGet package metadata -->
     <PackageId>CosmicChimps.Aspire.Hosting.Caravana</PackageId>
