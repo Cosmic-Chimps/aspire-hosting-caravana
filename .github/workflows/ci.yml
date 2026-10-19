@@ -39,6 +39,12 @@ jobs:
       - name: Test
         run: dotnet test CosmicChimps.Aspire.Hosting.Caravana.slnx --configuration Release --no-build
 
+      # The release workflow turns "Unreleased" into a version's section; without the heading
+      # there is nothing for it to rename.
+      - name: Changelog has an Unreleased section
+        run: |
+          grep -q '^## Unreleased[[:space:]]*$' CHANGELOG.md || { echo "::error::CHANGELOG.md needs a '## Unreleased' section"; exit 1; }
+
       # Packing exercises the NuGet metadata and README packaging, which a plain build does not.
       - name: Verify the package packs
         run: |

@@ -23,6 +23,8 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- The notes live in CHANGELOG.md and the GitHub Release; a link avoids quoting a multi-line section through -p:. -->
+    <PackageReleaseNotes>https://github.com/Cosmic-Chimps/aspire-hosting-caravana/releases/tag/v$(Version)</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>

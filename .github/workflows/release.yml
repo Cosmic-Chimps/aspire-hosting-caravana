@@ -1,0 +1,211 @@
+name: release
+
+# Publishes a release of CosmicChimps.Aspire.Hosting.Caravana: the package and its symbols on
+# nuget.org, and a GitHub release with the same files and the changelog's notes.
+#
+# Start it from GitHub (Actions > release > Run workflow) or with
+#
+#   gh workflow run release.yml -f version=0.1.0
+#
+# For a stable version it renames CHANGELOG.md's "## Unreleased" to "## 0.1.0 - <today>"
+# (tools/release.sh prepare), runs the tests, commits that to main, tags the commit v0.1.0, then
+# packs and publishes from that tag. Nothing is done by hand, so the tag can't point at a changelog
+# that wasn't prepared. A version whose section is already there (prepared and merged by hand)
+# skips the rename.
+#
+# Pushing a v* tag by hand (git tag v0.1.0 && git push origin v0.1.0) works too. When the tagged
+# commit has no "## 0.1.0" section, the run prepares it in its own checkout, so the notes are
+# the "Unreleased" entries, and after publishing commits that rename to main, as long as main is
+# still at the tagged commit. The tag itself never moves. If main has moved on, the release is
+# still published and the run ends with a warning saying how to fix the changelog by hand.
+#
+# A version with a suffix (0.2.0-preview.1) is a prerelease: NuGet lists it as a preview, the
+# GitHub release is marked as one, and CHANGELOG.md is left alone. Its notes are the current
+# "Unreleased" entries, so a preview can go out while "Unreleased" is empty or still growing.
+#
+# A NuGet version can never be replaced, only unlisted, so the tests run before anything is
+# published, and pushing the same version twice (a rerun of the same tag) is skipped, not an error.
+#
+# Required GitHub secret:
+#   NUGET_API_KEY  an API key from nuget.org with push scope for CosmicChimps.Aspire.Hosting.Caravana
+#                  (a key scoped to another package ID cannot push this one)
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, X.Y.Z or X.Y.Z-suffix for a prerelease (no v)"
+        required: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # commit the changelog, push the tag, create the release
+
+# Two releases never run at once: both would commit to main.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # A dispatched run starts from main's tip; a tag push from the tag.
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          # Full history, for SourceLink and for the main-moved check below.
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.x'
+
+      # Which version: the input of a dispatched run, or the pushed tag without its "v". A
+      # suffix after a dash makes it a prerelease.
+      - name: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Version '$version' isn't X.Y.Z or X.Y.Z-suffix."
+            exit 1
+          fi
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+          echo "VERSION=$version" >>"$GITHUB_ENV"
+          echo "TAG=v$version" >>"$GITHUB_ENV"
+          echo "PRERELEASE=$prerelease" >>"$GITHUB_ENV"
+
+      # A dispatched run refuses a version that is already tagged: a release is never replaced.
+      - name: refuse an existing tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::$TAG already exists. Delete it first (git push origin :refs/tags/$TAG) if no release was published from it."
+            exit 1
+          fi
+
+      # The changelog, prepared here unless it already has the version's section: for a
+      # dispatched run and for a pushed tag alike. prepare fails, before anything is built, when
+      # "## Unreleased" is empty: then there is nothing to say about this release. A prerelease
+      # never touches the changelog.
+      - name: prepare the changelog
+        if: env.PRERELEASE == 'false'
+        run: |
+          tools/release.sh notes "$VERSION" >/dev/null 2>&1 || tools/release.sh prepare "$VERSION"
+
+      # The release's notes: a stable version's CHANGELOG.md section, or for a prerelease the
+      # entries waiting under "Unreleased".
+      - name: notes
+        run: |
+          if [ "$PRERELEASE" = false ]; then
+            tools/release.sh notes "$VERSION" >"$RUNNER_TEMP/notes.md"
+          else
+            unreleased="$(tools/release.sh unreleased)"
+            {
+              if [ -n "$unreleased" ]; then
+                echo "Preview of the next release. Changes since the last release:"
+                echo
+                printf '%s\n' "$unreleased"
+              else
+                echo "Preview build; no changelog entries yet."
+              fi
+            } >"$RUNNER_TEMP/notes.md"
+          fi
+
+      # The same checks as CI (the whole solution). A NuGet version can never be replaced, only
+      # unlisted, so nothing is published from a commit that fails them.
+      - name: test
+        run: dotnet test CosmicChimps.Aspire.Hosting.Caravana.slnx --configuration Release
+
+      # Only now, with the tests green, does a dispatched run commit and tag. Main and the tag
+      # go up in one atomic push: both or neither.
+      - name: commit and tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- CHANGELOG.md; then
+            git commit -m "chore(release): $VERSION" -- CHANGELOG.md
+          fi
+          git tag -a "$TAG" -m "$TAG"
+          git push --atomic origin HEAD:main "refs/tags/$TAG"
+
+      # Packing builds the project; the version comes from the tag, not from the csproj.
+      - name: pack
+        run: >-
+          dotnet pack src/CosmicChimps.Aspire.Hosting.Caravana/CosmicChimps.Aspire.Hosting.Caravana.csproj
+          --configuration Release -p:Version="$VERSION" --output "$RUNNER_TEMP/nuget"
+
+      # --skip-duplicate makes a rerun of the same tag safe: a version already on nuget.org is
+      # left as it is.
+      - name: push to nuget.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: >-
+          dotnet nuget push "$RUNNER_TEMP"/nuget/*.nupkg
+          --api-key "$NUGET_API_KEY"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      - name: push symbols to nuget.org
+        # A symbols failure is not worth failing a release that is already on nuget.org.
+        continue-on-error: true
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: >-
+          dotnet nuget push "$RUNNER_TEMP"/nuget/*.snupkg
+          --api-key "$NUGET_API_KEY"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      # The GitHub release carries the package files and our notes. A rerun finds the release
+      # already there and updates it instead of failing.
+      - name: publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="CosmicChimps.Aspire.Hosting.Caravana $VERSION"
+          files=("$RUNNER_TEMP"/nuget/*.nupkg "$RUNNER_TEMP"/nuget/*.snupkg)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$title" --notes-file "$RUNNER_TEMP/notes.md" --prerelease="$PRERELEASE"
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            args=()
+            if [ "$PRERELEASE" = true ]; then
+              args+=(--prerelease)
+            fi
+            # --generate-notes adds GitHub's list of commits and the compare link after our notes.
+            gh release create "$TAG" "${files[@]}" --title "$title" \
+              --notes-file "$RUNNER_TEMP/notes.md" --generate-notes --verify-tag "${args[@]}"
+          fi
+
+      # A pushed tag whose changelog was prepared above: main gets the rename, so the next
+      # release starts from an empty "Unreleased". Only when main is still the tagged commit;
+      # otherwise its "Unreleased" may hold newer entries, which a rename would wrongly claim.
+      # The release is out either way, so this step warns rather than fails.
+      - name: record the changelog on main
+        if: github.event_name == 'push' && env.PRERELEASE == 'false'
+        run: |
+          if git diff --quiet -- CHANGELOG.md; then
+            exit 0 # the tagged commit had its section already
+          fi
+          git fetch -q origin main
+          if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
+            echo "::warning::main has moved past $TAG, so its CHANGELOG.md still lists $VERSION's entries under \"## Unreleased\". Move them under \"## $VERSION - $(date -u +%F)\" by hand."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(release): $VERSION" -- CHANGELOG.md
+          if ! git push origin HEAD:main; then
+            echo "::warning::Couldn't push the changelog rename to main. Run tools/release.sh prepare $VERSION on main and commit it."
+          fi
