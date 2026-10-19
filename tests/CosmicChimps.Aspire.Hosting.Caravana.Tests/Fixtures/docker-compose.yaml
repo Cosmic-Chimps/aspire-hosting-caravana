@@ -1,0 +1,87 @@
+services:
+  demo-aspire-compose-dashboard:
+    image: "mcr.microsoft.com/dotnet/nightly/aspire-dashboard:latest"
+    ports:
+      - "18888"
+    expose:
+      - "18889"
+      - "18890"
+    networks:
+      - "aspire"
+    restart: "always"
+  cache:
+    image: "docker.io/library/redis:8.6"
+    command:
+      - "-c"
+      - "redis-server --requirepass $$REDIS_PASSWORD"
+    entrypoint:
+      - "/bin/sh"
+    environment:
+      REDIS_PASSWORD: "${CACHE_PASSWORD}"
+    expose:
+      - "6379"
+    networks:
+      - "aspire"
+  seq:
+    image: "docker.io/datalust/seq:2025.2"
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_NOAUTHENTICATION: "True"
+    expose:
+      - "80"
+    volumes:
+      - type: "volume"
+        target: "/data"
+        source: "cosmicchimps.aspire.apphost-a6dba33c27-seq-data"
+        read_only: false
+    networks:
+      - "aspire"
+  apiservice:
+    image: "${APISERVICE_IMAGE}"
+    environment:
+      OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      HTTP_PORTS: "${APISERVICE_PORT}"
+      ConnectionStrings__seq: "http://seq:80"
+      SEQ_HOST: "seq"
+      SEQ_PORT: "80"
+      SEQ_URI: "http://seq:80"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://demo-aspire-compose-dashboard:18889"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "apiservice"
+    expose:
+      - "${APISERVICE_PORT}"
+    networks:
+      - "aspire"
+  webfrontend:
+    image: "${WEBFRONTEND_IMAGE}"
+    environment:
+      OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      HTTP_PORTS: "${WEBFRONTEND_PORT}"
+      ConnectionStrings__cache: "cache:6379,password=${CACHE_PASSWORD}"
+      CACHE_HOST: "cache"
+      CACHE_PORT: "6379"
+      CACHE_PASSWORD: "${CACHE_PASSWORD}"
+      CACHE_URI: "redis://:${CACHE_PASSWORD}@cache:6379"
+      APISERVICE_HTTP: "http://apiservice:${APISERVICE_PORT}"
+      services__apiservice__http__0: "http://apiservice:${APISERVICE_PORT}"
+      APISERVICE_HTTPS: "https://apiservice:${APISERVICE_PORT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://demo-aspire-compose-dashboard:18889"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "webfrontend"
+    ports:
+      - "${WEBFRONTEND_PORT}"
+    depends_on:
+      cache:
+        condition: "service_started"
+      apiservice:
+        condition: "service_started"
+    networks:
+      - "aspire"
+networks:
+  aspire:
+    driver: "bridge"
+volumes:
+  cosmicchimps.aspire.apphost-a6dba33c27-seq-data:
+    driver: "local"
