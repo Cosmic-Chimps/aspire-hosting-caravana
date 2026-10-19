@@ -1,0 +1,16 @@
+bin/
+obj/
+/packages/
+*.user
+.DS_Store
+.idea/
+.vs/
+
+# Aspire's generated output: holds resolved parameter values (.env.*)
+aspire-output/
+.env*
+!.env.example
+
+# CI output (ci.yml: test results + pack verification)
+test-results/
+pack-check/

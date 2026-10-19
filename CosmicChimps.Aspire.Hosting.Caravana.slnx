@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/example/">
+    <Project Path="example/CaravanaExample.AppHost/CaravanaExample.AppHost.csproj" />
+    <Project Path="example/CaravanaExample.Web/CaravanaExample.Web.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/CosmicChimps.Aspire.Hosting.Caravana/CosmicChimps.Aspire.Hosting.Caravana.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CosmicChimps.Aspire.Hosting.Caravana.Tests/CosmicChimps.Aspire.Hosting.Caravana.Tests.csproj" />
+  </Folder>
+</Solution>

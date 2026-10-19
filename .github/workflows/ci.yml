@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A superseded PR run tells you nothing; cancel it and keep the queue honest.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.x'
+
+      # The whole solution, not just src/: the example AppHost is the only consumer in this repo,
+      # so building it is what catches an accidental break of the public API.
+      - name: Restore
+        run: dotnet restore CosmicChimps.Aspire.Hosting.Caravana.slnx
+
+      - name: Build
+        run: dotnet build CosmicChimps.Aspire.Hosting.Caravana.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test CosmicChimps.Aspire.Hosting.Caravana.slnx --configuration Release --no-build
+
+      # Packing exercises the NuGet metadata and README packaging, which a plain build does not.
+      - name: Verify the package packs
+        run: |
+          dotnet pack src/CosmicChimps.Aspire.Hosting.Caravana/CosmicChimps.Aspire.Hosting.Caravana.csproj \
+            --configuration Release \
+            --no-build \
+            -p:Version=0.0.0-ci \
+            --output ./pack-check

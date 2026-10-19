@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- Aspire pipeline API (PipelineStepAnnotation, PipelineStep, etc.) is experimental -->
+    <NoWarn>$(NoWarn);ASPIREPIPELINES001</NoWarn>
+
+    <!-- NuGet package metadata -->
+    <PackageId>CosmicChimps.Aspire.Hosting.Caravana</PackageId>
+    <IsPackable>true</IsPackable>
+    <PackageTags>aspire hosting caravana nomad docker deployment paas</PackageTags>
+    <Description>Caravana deployment integration for Aspire: `aspire deploy` publishes the AppHost to Caravana (a self-hosted PaaS on Nomad) as one app, with secrets, volumes, domains, health checks and backups.</Description>
+    <Authors>Cosmic Chimps</Authors>
+    <Company>Cosmic Chimps</Company>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/Cosmic-Chimps/aspire-hosting-caravana</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Cosmic-Chimps/aspire-hosting-caravana</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Docker" Version="13.6.1" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.401" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CosmicChimps.Aspire.Hosting.Caravana.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The repo-root README is the GitHub landing page and the package readme: one copy. -->
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>
