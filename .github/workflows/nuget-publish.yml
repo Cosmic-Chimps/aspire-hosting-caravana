@@ -1,0 +1,89 @@
+name: Publish CosmicChimps.Aspire.Hosting.Caravana to NuGet
+
+# Triggered by tags of the form: v1.2.3  or  v1.2.3-preview.1
+#
+# To release a new version:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# Required GitHub Secret:
+#   NUGET_API_KEY  — API key from nuget.org with push scope for CosmicChimps.*
+#                    (a key scoped to another package ID cannot push this one)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: Pack & Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history required for SourceLink
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.x'
+
+      - name: Extract version from tag
+        id: version
+        # Tag: v1.2.3  →  VERSION=1.2.3
+        # Tag: v1.2.3-preview.1  →  VERSION=1.2.3-preview.1
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+      # Gate the release on the regression suite: a tag must not be able to ship a package the
+      # tests reject. The sibling Dokploy integration shipped three broken releases before it
+      # added this step.
+      - name: Test
+        run: |
+          dotnet test \
+            tests/CosmicChimps.Aspire.Hosting.Caravana.Tests/CosmicChimps.Aspire.Hosting.Caravana.Tests.csproj \
+            --configuration Release
+
+      - name: Restore
+        run: |
+          dotnet restore \
+            src/CosmicChimps.Aspire.Hosting.Caravana/CosmicChimps.Aspire.Hosting.Caravana.csproj
+
+      - name: Build
+        run: |
+          dotnet build \
+            src/CosmicChimps.Aspire.Hosting.Caravana/CosmicChimps.Aspire.Hosting.Caravana.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:Version=${{ steps.version.outputs.VERSION }}
+
+      - name: Pack
+        run: |
+          dotnet pack \
+            src/CosmicChimps.Aspire.Hosting.Caravana/CosmicChimps.Aspire.Hosting.Caravana.csproj \
+            --configuration Release \
+            --no-build \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
+            --output ./nuget-output
+
+      - name: Push to NuGet.org
+        run: |
+          dotnet nuget push ./nuget-output/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Push symbols to NuGet.org
+        run: |
+          dotnet nuget push ./nuget-output/*.snupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+        continue-on-error: true # snupkg push failure is non-fatal
