@@ -364,7 +364,10 @@ public class DeployFlowTests
     }
 
     /// <summary>A Caravana whose deployment d1 is superseded and whose list answers as given.</summary>
-    private static FakeHandler SupersededCaravana(Func<SeenRequest, HttpResponseMessage> listAnswer) =>
+    private static FakeHandler SupersededCaravana(
+        Func<SeenRequest, HttpResponseMessage> listAnswer,
+        Func<SeenRequest, HttpResponseMessage>? newerAnswer = null
+    ) =>
         new(r =>
         {
             if (r.Method == HttpMethod.Get && r.Path == "/v1/apps/shop")
@@ -375,6 +378,8 @@ public class DeployFlowTests
                 return FakeHandler.Json(HttpStatusCode.OK, FakeHandler.Deployment("superseded", "Cancelled due to newer version of job"));
             if (r.Method == HttpMethod.Get && r.Path.StartsWith("/v1/apps/shop/deployments?"))
                 return listAnswer(r);
+            if (r.Method == HttpMethod.Get && r.Path.StartsWith("/v1/apps/shop/deployments/") && newerAnswer is not null)
+                return newerAnswer(r);
             return FakeHandler.Error(HttpStatusCode.NotFound, "not_found", $"unexpected {r}");
         });
 
@@ -416,7 +421,6 @@ public class DeployFlowTests
     [Theory]
     [InlineData("failed")]
     [InlineData("reverted")]
-    [InlineData("running")]
     public async Task ASupersededDeployment_WithANewerOneThatIsNotHealthy_Fails(string status)
     {
         var handler = SupersededCaravana(_ => List(Listed("d2", status, "webhook"), Listed("d1", "superseded", "manual")));
@@ -425,6 +429,111 @@ public class DeployFlowTests
         var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(), Ct));
 
         Assert.Contains($"Superseded by deployment d2 (by a webhook), now {status}", ex.Message);
+    }
+
+    /// <summary>The newer deployment d2 as <c>GET .../deployments/d2</c> answers it, one status per poll.</summary>
+    private static Func<SeenRequest, HttpResponseMessage> Polled(string id, params string[] statuses)
+    {
+        var polls = 0;
+        return r =>
+        {
+            Assert.Equal($"/v1/apps/shop/deployments/{id}", r.Path);
+            var status = statuses[Math.Min(polls++, statuses.Length - 1)];
+            return FakeHandler.Json(HttpStatusCode.OK, Listed(id, status, "console", 1));
+        };
+    }
+
+    [Fact]
+    public async Task TheNewerDeployment_StillRunning_IsWaitedFor_AndPassesWhenHealthy()
+    {
+        var handler = SupersededCaravana(
+            _ => List(Listed("d2", "running", "console", 1), Listed("d1", "superseded", "manual")),
+            Polled("d2", "running", "running", "healthy")
+        );
+        var (flow, log, _) = NewFlow(handler);
+
+        var deployment = await flow.RunAsync(Plan(), Ct);
+
+        Assert.Equal("superseded", deployment.Status);
+        Assert.Equal(3, handler.Requests.Count(r => r.Path == "/v1/apps/shop/deployments/d2"));
+        Assert.Contains("was superseded by deployment d2 (v1, from the console), now healthy", log.All);
+    }
+
+    [Fact]
+    public async Task TheNewerDeployment_StillRunning_FailsWhenItEndsFailed()
+    {
+        var handler = SupersededCaravana(
+            _ => List(Listed("d2", "running", "console", 1), Listed("d1", "superseded", "manual")),
+            Polled("d2", "running", "failed")
+        );
+        var (flow, _, _) = NewFlow(handler);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(), Ct));
+
+        Assert.Contains("Superseded by deployment d2 (v1, from the console), now failed", ex.Message);
+    }
+
+    [Fact]
+    public async Task TheNewerDeployment_StillRunningWhenTheTimeoutEnds_Fails()
+    {
+        var handler = SupersededCaravana(
+            _ => List(Listed("d2", "running", "console", 1), Listed("d1", "superseded", "manual")),
+            Polled("d2", "running")
+        );
+        var (flow, _, _) = NewFlow(handler);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(timeout: TimeSpan.FromMilliseconds(100)), Ct));
+
+        Assert.Contains("Superseded by deployment d2 (v1, from the console), still running when the wait ended: check the app in Caravana.", ex.Message);
+    }
+
+    [Fact]
+    public async Task ASupersededNewerDeployment_IsFollowedToTheNewestOne()
+    {
+        var lists = 0;
+        var handler = SupersededCaravana(
+            _ =>
+                lists++ == 0
+                    ? List(Listed("d2", "running", "console", 1), Listed("d1", "superseded", "manual"))
+                    : List(Listed("d3", "healthy", "manual", 2), Listed("d2", "superseded", "console", 1), Listed("d1", "superseded", "manual")),
+            Polled("d2", "superseded")
+        );
+        var (flow, log, _) = NewFlow(handler);
+
+        var deployment = await flow.RunAsync(Plan(), Ct);
+
+        Assert.Equal("superseded", deployment.Status);
+        Assert.Equal(2, lists);
+        Assert.Contains("superseded by deployment d3 (v2, by the API), now healthy", log.All);
+    }
+
+    [Fact]
+    public async Task ASupersedeChain_IsFollowedAFewHopsAtMost()
+    {
+        // Every read finds one newer deployment that is superseded in turn.
+        var lists = 0;
+        var handler = SupersededCaravana(_ => List(Listed($"d{++lists + 1}", "superseded", "console", lists), Listed("d1", "superseded", "manual")));
+        var (flow, _, _) = NewFlow(handler);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(), Ct));
+
+        Assert.Contains("now superseded: the app is not healthy", ex.Message);
+        Assert.Equal(6, handler.Requests.Count(r => r.Path.StartsWith("/v1/apps/shop/deployments?")));
+    }
+
+    [Fact]
+    public async Task FailOnSuperseded_FailsAtOnce_WithoutWaitingForTheNewerDeployment()
+    {
+        var handler = SupersededCaravana(
+            _ => List(Listed("d2", "running", "console", 1), Listed("d1", "superseded", "manual")),
+            Polled("d2", "healthy")
+        );
+        var (flow, _, _) = NewFlow(handler);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(failOnSuperseded: true), Ct));
+
+        Assert.Contains("Superseded by deployment d2 (v1, from the console), now running", ex.Message);
+        Assert.DoesNotContain(handler.Requests, r => r.Path == "/v1/apps/shop/deployments/d2");
     }
 
     [Fact]

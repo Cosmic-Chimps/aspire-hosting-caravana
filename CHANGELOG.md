@@ -15,9 +15,11 @@ release renames it.
 ### Added
 - When the deployment the step waits for ends `superseded`, the step reads the app's deployments and
   says which one replaced it: its ID, job version, where it came from (the console, the API, a
-  webhook, or CI with the commit) and its status. The step passes with a warning when that
-  deployment is healthy, and still fails when it isn't or can't be read. The new `FailOnSuperseded`
-  setting (default `false`) fails the step in the healthy case too.
+  webhook, or CI with the commit) and its status. That deployment has usually only just started, so
+  the step waits for it, within `DeploymentTimeout`, and follows it if something newer replaces it
+  in turn. It passes with a warning when the newest is healthy, and fails when it isn't, can't be
+  read or is still in progress when the wait ends. The new `FailOnSuperseded` setting (default
+  `false`) fails the step at once, without waiting, whatever the newer deployment is.
 - `aspire deploy` can publish an AppHost to Caravana. Add `builder.PublishToCaravana(name, ...)`
   to the AppHost and the deploy builds and pushes the images as Aspire always does, sends the
   AppHost as one Caravana app (each resource a service), and updates that same app on every

@@ -183,8 +183,11 @@ internal sealed class CaravanaApiClient(HttpClient http, string token, SecretRed
     {
         if (location is not null)
             return location.IsAbsoluteUri ? location.PathAndQuery : location.OriginalString;
-        return $"/v1/apps/{Uri.EscapeDataString(appId)}/deployments/{Uri.EscapeDataString(deploymentId)}";
+        return DeploymentPath(appId, deploymentId);
     }
+
+    internal static string DeploymentPath(string appId, string deploymentId) =>
+        $"/v1/apps/{Uri.EscapeDataString(appId)}/deployments/{Uri.EscapeDataString(deploymentId)}";
 
     internal static DeploymentInfo ParseDeployment(JsonElement root)
     {
