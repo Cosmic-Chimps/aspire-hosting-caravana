@@ -38,3 +38,9 @@ release renames it.
   Caravana's history shows the deploy as coming from CI.
 - A deploy token (scoped to one app of one project) works as well as a full token. When the project
   or environment doesn't exist and the token can't create it, the step says so.
+
+### Fixed
+- The README says what to do when the app name equals one of the AppHost's resources (give the
+  Caravana resource another name and set `AppName`), and its GitHub Actions example installs the
+  Aspire CLI as a pinned local tool (`.config/dotnet-tools.json`, `dotnet tool restore`,
+  `dotnet aspire deploy`) instead of piping a remote script into a shell.

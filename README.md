@@ -92,6 +92,11 @@ data volume) that builds in CI.
 | `DeploymentTimeout` | 10 minutes | How long to wait. |
 | `FailOnSuperseded` | `false` | When a newer deployment replaced this one (a deploy from the console, say), the step names it and passes with a warning if it is healthy. `true` fails the step in that case too. A newer deployment that isn't healthy, or can't be read, always fails the step. |
 
+If the app name equals one of your AppHost's resources, give the Caravana resource another name and set
+`AppName`: Aspire resource names are case-insensitive, so `PublishToCaravana("frunchy", ...)` collides
+with a resource called `frunchy`. For example:
+`PublishToCaravana("caravana", s => { s.AppName = "frunchy"; ... })`.
+
 The app's ID in Caravana is its name in `default`/`production`, otherwise
 `<project>--<environment>--<name>`. Names are lower-case letters, numbers and single dashes.
 
@@ -143,6 +148,16 @@ unique, so the same AppHost gives the same volume on every run. On the host it i
 
 ## GitHub Actions
 
+Pin the Aspire CLI as a local .NET tool, so CI runs the version you chose and no remote script. Once, in
+the repository:
+
+```bash
+dotnet new tool-manifest
+dotnet tool install Aspire.Cli --version 13.6.1   # the Aspire version of this package
+```
+
+Commit `.config/dotnet-tools.json`. Then the workflow restores the tool and runs it:
+
 ```yaml
 name: deploy
 on:
@@ -160,8 +175,8 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.x'
-      - name: Install the Aspire CLI
-        run: curl -sSL https://aspire.dev/install.sh | bash
+      - name: Restore the Aspire CLI
+        run: dotnet tool restore
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -175,7 +190,7 @@ jobs:
           Parameters__registry-endpoint: ghcr.io
           Parameters__registry-repository: ${{ github.repository_owner }}
           Parameters__db-password: ${{ secrets.DB_PASSWORD }}
-        run: aspire deploy
+        run: dotnet aspire deploy
 ```
 
 Inside GitHub Actions the publisher sends the commit, ref, actor, run address and repository as
