@@ -56,6 +56,7 @@ public static class CaravanaResourceExtensions
             ComposeEnvironmentBuilder = composeEnv,
             DeployDashboard = settings.DeployDashboard,
             WaitForDeployment = settings.WaitForDeployment,
+            FailOnSuperseded = settings.FailOnSuperseded,
             DeploymentTimeout = settings.DeploymentTimeout,
         };
 

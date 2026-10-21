@@ -36,6 +36,13 @@ public sealed class CaravanaSettings
     /// <summary>Wait until the deployment is healthy (and fail the step if it is not). Default true.</summary>
     public bool WaitForDeployment { get; set; } = true;
 
+    /// <summary>
+    /// Fail the step when a newer deployment replaced this one, even if that one is healthy. Default
+    /// false: Caravana's newest deployment wins, so the step passes with a warning when the newer one
+    /// is healthy, and fails when it is not (or can't be read).
+    /// </summary>
+    public bool FailOnSuperseded { get; set; }
+
     /// <summary>How long to wait for the deployment. Default 10 minutes.</summary>
     public TimeSpan DeploymentTimeout { get; set; } = TimeSpan.FromMinutes(10);
 }

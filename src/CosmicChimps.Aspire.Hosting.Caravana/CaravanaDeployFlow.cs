@@ -14,7 +14,8 @@ internal sealed record DeployPlan(
     bool Wait,
     TimeSpan Timeout,
     TimeSpan PollInterval,
-    IReadOnlyDictionary<string, string> OriginHeaders
+    IReadOnlyDictionary<string, string> OriginHeaders,
+    bool FailOnSuperseded = false
 );
 
 /// <summary>
@@ -61,10 +62,78 @@ internal sealed class CaravanaDeployFlow(CaravanaApiClient api, SecretRedactor r
 
             default:
                 var reason = string.IsNullOrWhiteSpace(final.Error) ? "no reason given" : redactor.Redact(final.Error);
-                throw new CaravanaDeployException(
-                    $"Deployment {final.Id} of app '{appId}' {final.Status}: {reason}"
-                );
+                var failure = $"Deployment {final.Id} of app '{appId}' {final.Status}: {reason}";
+
+                if (outcome.Kind != DeploymentOutcomeKind.Superseded)
+                    throw new CaravanaDeployException(failure);
+
+                var (newer, unread) = await FindNewerAsync(appId, final, ct);
+                if (newer is null)
+                    throw new CaravanaDeployException($"{failure}. {unread}");
+
+                var by = Describe(newer);
+                if (newer.Status != "healthy")
+                    throw new CaravanaDeployException($"{failure}. Superseded by {by}: the app is not healthy.");
+                if (plan.FailOnSuperseded)
+                    throw new CaravanaDeployException($"{failure}. Superseded by {by}.");
+
+                logger.LogWarning("Deployment {Id} of app '{AppId}' was superseded by {By}; the app is healthy", final.Id, appId, by);
+                return final;
         }
+    }
+
+    /// <summary>
+    /// The deployment that replaced <paramref name="superseded"/>: the app's newest one. Either it, or why it
+    /// could not be found.
+    /// </summary>
+    private async Task<(DeploymentInfo? Newer, string Problem)> FindNewerAsync(
+        string appId,
+        DeploymentInfo superseded,
+        CancellationToken ct
+    )
+    {
+        try
+        {
+            var deployments = await api.ListDeploymentsAsync(appId, 20, ct);
+            var newest = deployments.FirstOrDefault();
+            return newest is null || newest.Id == superseded.Id
+                ? (null, "No newer deployment was found to say what replaced it: check the app in Caravana.")
+                : (newest, "");
+        }
+        catch (Exception ex) when (ex is CaravanaApiException or HttpRequestException)
+        {
+            var text = ex is CaravanaApiException apiError ? apiError.Describe() : ex.Message;
+            return (null, $"The newer deployment could not be read ({redactor.Redact(text)}): check the app in Caravana.");
+        }
+    }
+
+    /// <summary><c>deployment d2 (v3, from the console), now healthy</c>.</summary>
+    private string Describe(DeploymentInfo deployment)
+    {
+        var details = new List<string>();
+        if (deployment.JobVersion is { } version)
+            details.Add($"v{version}");
+        details.Add(Source(deployment));
+        return redactor.Redact($"deployment {deployment.Id} ({string.Join(", ", details)}), now {deployment.Status}");
+    }
+
+    private static string Source(DeploymentInfo deployment)
+    {
+        // Origin is what CI sent in the Caravana-Origin-* headers; it wins over the trigger.
+        if (deployment.Origin is { } origin)
+        {
+            var commit = origin.Commit is { Length: > 0 } c ? c[..Math.Min(7, c.Length)] : null;
+            return commit is null ? "from CI" : $"from CI {commit}";
+        }
+
+        return deployment.Trigger switch
+        {
+            "console" => "from the console",
+            "manual" => "by the API",
+            "webhook" => "by a webhook",
+            { Length: > 0 } other => $"trigger {other}",
+            _ => "origin unknown",
+        };
     }
 
     /// <summary>

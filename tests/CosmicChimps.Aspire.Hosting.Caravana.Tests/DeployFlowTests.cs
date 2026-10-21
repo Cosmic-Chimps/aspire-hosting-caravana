@@ -17,7 +17,8 @@ public class DeployFlowTests
         string environment = "production",
         bool wait = true,
         TimeSpan? timeout = null,
-        IReadOnlyDictionary<string, string>? origin = null
+        IReadOnlyDictionary<string, string>? origin = null,
+        bool failOnSuperseded = false
     ) =>
         new(
             project,
@@ -34,7 +35,8 @@ public class DeployFlowTests
             wait,
             timeout ?? TimeSpan.FromSeconds(5),
             TimeSpan.FromMilliseconds(1),
-            origin ?? new Dictionary<string, string>()
+            origin ?? new Dictionary<string, string>(),
+            failOnSuperseded
         );
 
     private static (CaravanaDeployFlow Flow, ListLogger Log, SecretRedactor Redactor) NewFlow(FakeHandler handler)
@@ -359,6 +361,112 @@ public class DeployFlowTests
 
         Assert.Contains(status, ex.Message);
         Assert.Contains("boom", ex.Message);
+    }
+
+    /// <summary>A Caravana whose deployment d1 is superseded and whose list answers as given.</summary>
+    private static FakeHandler SupersededCaravana(Func<SeenRequest, HttpResponseMessage> listAnswer) =>
+        new(r =>
+        {
+            if (r.Method == HttpMethod.Get && r.Path == "/v1/apps/shop")
+                return FakeHandler.Json(HttpStatusCode.OK, """{"revision":"r1"}""");
+            if (r.Method == HttpMethod.Post && r.Path == "/v1/apps/shop/compose")
+                return FakeHandler.Json(HttpStatusCode.Accepted, FakeHandler.Deployment("pending"), "/v1/apps/shop/deployments/d1");
+            if (r.Method == HttpMethod.Get && r.Path == "/v1/apps/shop/deployments/d1")
+                return FakeHandler.Json(HttpStatusCode.OK, FakeHandler.Deployment("superseded", "Cancelled due to newer version of job"));
+            if (r.Method == HttpMethod.Get && r.Path.StartsWith("/v1/apps/shop/deployments?"))
+                return listAnswer(r);
+            return FakeHandler.Error(HttpStatusCode.NotFound, "not_found", $"unexpected {r}");
+        });
+
+    private static HttpResponseMessage List(params string[] deployments) =>
+        FakeHandler.Json(HttpStatusCode.OK, "{\"deployments\":[" + string.Join(",", deployments) + "]}");
+
+    private static string Listed(string id, string status, string trigger, int? version = null, string? origin = null) =>
+        "{\"id\":\"" + id + "\",\"appId\":\"shop\",\"trigger\":\"" + trigger + "\",\"status\":\"" + status + "\""
+        + (version is null ? "" : ",\"jobVersion\":" + version)
+        + (origin is null ? "" : ",\"origin\":" + origin)
+        + ",\"warnings\":[]}";
+
+    [Fact]
+    public async Task ASupersededDeployment_WithAHealthyNewerOne_PassesWithAWarningNamingIt()
+    {
+        var handler = SupersededCaravana(_ => List(Listed("d2", "healthy", "console", 7), Listed("d1", "superseded", "manual", 6)));
+        var (flow, log, _) = NewFlow(handler);
+
+        var deployment = await flow.RunAsync(Plan(), Ct);
+
+        Assert.Equal("superseded", deployment.Status);
+        var list = Assert.Single(handler.Requests, r => r.Path.StartsWith("/v1/apps/shop/deployments?"));
+        Assert.Equal($"Bearer {Token}", list.Header("Authorization"));
+        Assert.Contains("Warning: Deployment d1 of app 'shop' was superseded by deployment d2 (v7, from the console), now healthy", log.All);
+    }
+
+    [Fact]
+    public async Task ASupersededDeployment_WithAHealthyNewerOne_FailsWhenFailOnSupersededIsSet()
+    {
+        var handler = SupersededCaravana(_ => List(Listed("d2", "healthy", "console", 7), Listed("d1", "superseded", "manual")));
+        var (flow, _, _) = NewFlow(handler);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(failOnSuperseded: true), Ct));
+
+        Assert.Contains("superseded: Cancelled due to newer version of job", ex.Message);
+        Assert.Contains("Superseded by deployment d2 (v7, from the console), now healthy", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("reverted")]
+    [InlineData("running")]
+    public async Task ASupersededDeployment_WithANewerOneThatIsNotHealthy_Fails(string status)
+    {
+        var handler = SupersededCaravana(_ => List(Listed("d2", status, "webhook"), Listed("d1", "superseded", "manual")));
+        var (flow, _, _) = NewFlow(handler);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(), Ct));
+
+        Assert.Contains($"Superseded by deployment d2 (by a webhook), now {status}", ex.Message);
+    }
+
+    [Fact]
+    public async Task TheNewerDeployment_FromCI_NamesTheShortCommit()
+    {
+        var handler = SupersededCaravana(_ =>
+            List(
+                Listed("d2", "failed", "manual", 4, """{"commit":"abc1234def5678","actor":"ana"}"""),
+                Listed("d1", "superseded", "manual")
+            )
+        );
+        var (flow, _, _) = NewFlow(handler);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(), Ct));
+
+        Assert.Contains("deployment d2 (v4, from CI abc1234), now failed", ex.Message);
+        Assert.DoesNotContain("def5678", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task ASupersededDeployment_WhoseNewerOneCantBeRead_Fails(HttpStatusCode status)
+    {
+        var handler = SupersededCaravana(_ => FakeHandler.Error(status, "token_scope", "nope"));
+        var (flow, _, _) = NewFlow(handler);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(), Ct));
+
+        Assert.Contains("superseded: Cancelled due to newer version of job", ex.Message);
+        Assert.Contains("could not be read", ex.Message);
+    }
+
+    [Fact]
+    public async Task ASupersededDeployment_WithNoNewerOneInTheList_Fails()
+    {
+        var handler = SupersededCaravana(_ => List(Listed("d1", "superseded", "manual")));
+        var (flow, _, _) = NewFlow(handler);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => flow.RunAsync(Plan(), Ct));
+
+        Assert.Contains("No newer deployment was found", ex.Message);
     }
 
     [Fact]

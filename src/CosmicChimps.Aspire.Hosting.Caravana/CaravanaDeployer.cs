@@ -59,7 +59,8 @@ internal static class CaravanaDeployer
             resource.WaitForDeployment,
             resource.DeploymentTimeout,
             resource.PollInterval,
-            OriginHeaders.From(Environment.GetEnvironmentVariable)
+            OriginHeaders.From(Environment.GetEnvironmentVariable),
+            resource.FailOnSuperseded
         );
 
         logger.LogInformation(
@@ -78,7 +79,9 @@ internal static class CaravanaDeployer
             var deployment = await new CaravanaDeployFlow(api, redactor, logger).RunAsync(plan, ct);
             await task.CompleteAsync(
                 $"Deployment {deployment.Id}: {deployment.Status}",
-                deployment.Warnings.Count > 0 ? CompletionState.CompletedWithWarning : CompletionState.Completed,
+                deployment.Warnings.Count > 0 || deployment.Status == "superseded"
+                    ? CompletionState.CompletedWithWarning
+                    : CompletionState.Completed,
                 ct
             );
         }

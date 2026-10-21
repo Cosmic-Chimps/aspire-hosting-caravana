@@ -90,6 +90,7 @@ data volume) that builds in CI.
 | `DeployDashboard` | `false` | Deploy the Aspire dashboard too. It has no sign-in unless you configure one, so it is off. |
 | `WaitForDeployment` | `true` | Wait until healthy and fail the step otherwise. |
 | `DeploymentTimeout` | 10 minutes | How long to wait. |
+| `FailOnSuperseded` | `false` | When a newer deployment replaced this one (a deploy from the console, say), the step names it and passes with a warning if it is healthy. `true` fails the step in that case too. A newer deployment that isn't healthy, or can't be read, always fails the step. |
 
 The app's ID in Caravana is its name in `default`/`production`, otherwise
 `<project>--<environment>--<name>`. Names are lower-case letters, numbers and single dashes.
@@ -179,6 +180,11 @@ jobs:
 
 Inside GitHub Actions the publisher sends the commit, ref, actor, run address and repository as
 `Caravana-Origin-*` headers, so Caravana's history shows "from CI" with a link to the run.
+
+If a newer deployment replaces the one the step waits for (the owner deployed from the console during the
+rollout), the step says which one it is, for example `superseded by deployment d2 (v7, from the console),
+now healthy`. It passes with a warning when that deployment is healthy, and fails when it isn't, unless
+`FailOnSuperseded` is `true`.
 
 If the images are private, Caravana pulls them with credentials added under Settings > Registries. The
 step says so when Caravana answers `image_not_found` or `registry_auth_failed`.

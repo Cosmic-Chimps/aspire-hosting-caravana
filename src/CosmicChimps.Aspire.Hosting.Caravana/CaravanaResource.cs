@@ -44,6 +44,9 @@ public sealed class CaravanaResource : Resource
     /// <summary>Wait for the deployment. See <see cref="CaravanaSettings.WaitForDeployment"/>.</summary>
     public bool WaitForDeployment { get; set; } = true;
 
+    /// <summary>Fail when a healthy newer deployment superseded this one. See <see cref="CaravanaSettings.FailOnSuperseded"/>.</summary>
+    public bool FailOnSuperseded { get; set; }
+
     /// <summary>The wait limit. See <see cref="CaravanaSettings.DeploymentTimeout"/>.</summary>
     public TimeSpan DeploymentTimeout { get; set; } = TimeSpan.FromMinutes(10);
 
