@@ -26,12 +26,18 @@ internal sealed class CaravanaApiException(int status, string? code, string mess
 
 internal sealed record WarningInfo(string Field, string Message);
 
+/// <summary>Where a deploy came from, as Caravana's <c>Deployment.origin</c> says. Every part is optional.</summary>
+internal sealed record OriginInfo(string? Commit, string? Actor, string? Run);
+
 /// <summary>The parts of a Caravana <c>Deployment</c> the publisher uses.</summary>
 internal sealed record DeploymentInfo(
     string Id,
     string Status,
     string? Error,
-    IReadOnlyList<WarningInfo> Warnings
+    IReadOnlyList<WarningInfo> Warnings,
+    string? Trigger = null,
+    int? JobVersion = null,
+    OriginInfo? Origin = null
 )
 {
     internal bool IsFinal => Status is "healthy" or "failed" or "reverted" or "superseded";
@@ -147,14 +153,41 @@ internal sealed class CaravanaApiClient(HttpClient http, string token, SecretRed
         return ParseDeployment(doc.RootElement);
     }
 
+    /// <summary>
+    /// <c>GET /v1/apps/{id}/deployments</c>: the app's newest deployments, newest first.
+    /// </summary>
+    internal async Task<IReadOnlyList<DeploymentInfo>> ListDeploymentsAsync(string appId, int limit, CancellationToken ct)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"/v1/apps/{Uri.EscapeDataString(appId)}/deployments?limit={limit}",
+            null,
+            NoHeaders,
+            ct
+        );
+        await EnsureSuccessAsync(response, ct);
+        using var doc = await ReadJsonAsync(response, ct);
+
+        var deployments = new List<DeploymentInfo>();
+        if (doc.RootElement.TryGetProperty("deployments", out var list) && list.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in list.EnumerateArray())
+                deployments.Add(ParseDeployment(item));
+        }
+        return deployments;
+    }
+
     // The token is sent to whatever address this returns, so only the path of Location is used:
     // never a different host.
     private static string SafeLocation(Uri? location, string appId, string deploymentId)
     {
         if (location is not null)
             return location.IsAbsoluteUri ? location.PathAndQuery : location.OriginalString;
-        return $"/v1/apps/{Uri.EscapeDataString(appId)}/deployments/{Uri.EscapeDataString(deploymentId)}";
+        return DeploymentPath(appId, deploymentId);
     }
+
+    internal static string DeploymentPath(string appId, string deploymentId) =>
+        $"/v1/apps/{Uri.EscapeDataString(appId)}/deployments/{Uri.EscapeDataString(deploymentId)}";
 
     internal static DeploymentInfo ParseDeployment(JsonElement root)
     {
@@ -176,8 +209,22 @@ internal sealed class CaravanaApiClient(HttpClient http, string token, SecretRed
             root.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
             root.TryGetProperty("status", out var status) ? status.GetString() ?? "" : "",
             root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String ? error.GetString() : null,
-            warnings
+            warnings,
+            root.TryGetProperty("trigger", out var trigger) && trigger.ValueKind == JsonValueKind.String ? trigger.GetString() : null,
+            root.TryGetProperty("jobVersion", out var version) && version.TryGetInt32(out var v) ? v : null,
+            ParseOrigin(root)
         );
+    }
+
+    private static OriginInfo? ParseOrigin(JsonElement root)
+    {
+        if (!root.TryGetProperty("origin", out var origin) || origin.ValueKind != JsonValueKind.Object)
+            return null;
+
+        string? Text(string name) =>
+            origin.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+        return new OriginInfo(Text("commit"), Text("actor"), Text("run"));
     }
 
     // ── plumbing ─────────────────────────────────────────────────────────────

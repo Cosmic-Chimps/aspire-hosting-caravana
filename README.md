@@ -90,6 +90,12 @@ data volume) that builds in CI.
 | `DeployDashboard` | `false` | Deploy the Aspire dashboard too. It has no sign-in unless you configure one, so it is off. |
 | `WaitForDeployment` | `true` | Wait until healthy and fail the step otherwise. |
 | `DeploymentTimeout` | 10 minutes | How long to wait. |
+| `FailOnSuperseded` | `false` | When a newer deployment replaced this one (a deploy from the console, say), the step names it, waits for it, and passes with a warning if it ends healthy. `true` fails the step at once instead. A newer deployment that isn't healthy, can't be read, or is still in progress when `DeploymentTimeout` ends, always fails the step. |
+
+If the app name equals one of your AppHost's resources, give the Caravana resource another name and set
+`AppName`: Aspire resource names are case-insensitive, so `PublishToCaravana("frunchy", ...)` collides
+with a resource called `frunchy`. For example:
+`PublishToCaravana("caravana", s => { s.AppName = "frunchy"; ... })`.
 
 The app's ID in Caravana is its name in `default`/`production`, otherwise
 `<project>--<environment>--<name>`. Names are lower-case letters, numbers and single dashes.
@@ -142,6 +148,16 @@ unique, so the same AppHost gives the same volume on every run. On the host it i
 
 ## GitHub Actions
 
+Pin the Aspire CLI as a local .NET tool, so CI runs the version you chose and no remote script. Once, in
+the repository:
+
+```bash
+dotnet new tool-manifest
+dotnet tool install Aspire.Cli --version 13.6.1   # the Aspire version of this package
+```
+
+Commit `.config/dotnet-tools.json`. Then the workflow restores the tool and runs it:
+
 ```yaml
 name: deploy
 on:
@@ -159,8 +175,8 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.x'
-      - name: Install the Aspire CLI
-        run: curl -sSL https://aspire.dev/install.sh | bash
+      - name: Restore the Aspire CLI
+        run: dotnet tool restore
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -174,11 +190,17 @@ jobs:
           Parameters__registry-endpoint: ghcr.io
           Parameters__registry-repository: ${{ github.repository_owner }}
           Parameters__db-password: ${{ secrets.DB_PASSWORD }}
-        run: aspire deploy
+        run: dotnet aspire deploy
 ```
 
 Inside GitHub Actions the publisher sends the commit, ref, actor, run address and repository as
 `Caravana-Origin-*` headers, so Caravana's history shows "from CI" with a link to the run.
+
+If a newer deployment replaces the one the step waits for (the owner deployed from the console during the
+rollout), the step says which one it is, for example `superseded by deployment d2 (v7, from the console),
+now healthy`. That deployment has usually only just started, so the step waits for it (within
+`DeploymentTimeout`). It passes with a warning when it ends healthy, and fails when it doesn't, unless
+`FailOnSuperseded` is `true`, which fails at once.
 
 If the images are private, Caravana pulls them with credentials added under Settings > Registries. The
 step says so when Caravana answers `image_not_found` or `registry_auth_failed`.
