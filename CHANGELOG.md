@@ -12,6 +12,8 @@ release renames it.
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-22
+
 ### Added
 - When the deployment the step waits for ends `superseded`, the step reads the app's deployments and
   says which one replaced it: its ID, job version, where it came from (the console, the API, a
