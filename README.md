@@ -14,7 +14,7 @@ Run it again and the same app is updated.
 
 ## Requirements
 
-- .NET 10, Aspire 13.6 (this package builds on `Aspire.Hosting.Docker` 13.6.1).
+- .NET 10, Aspire 13.6 (this package builds on `Aspire.Hosting.Docker` 13.6.4).
 - Caravana 0.9.0 or later (its API 0.21 accepts what Aspire writes: a network and volumes with
   `driver`, and `entrypoint`).
 - A container registry both `aspire deploy` can push to and Caravana can pull from.
@@ -24,6 +24,11 @@ Run it again and the same app is updated.
 ```bash
 dotnet add package CosmicChimps.Aspire.Hosting.Caravana
 ```
+
+The package's version follows Aspire's: 13.6.x builds on Aspire 13.6, and the last number counts
+this package's own releases on that line, so it doesn't match Aspire's patch number. Pick the
+line that matches your AppHost's Aspire version; [CHANGELOG.md](CHANGELOG.md) says which Aspire
+version each release builds on. Releases before 13.6.4 were numbered 0.x.
 
 ## Quick start
 
@@ -153,7 +158,7 @@ the repository:
 
 ```bash
 dotnet new tool-manifest
-dotnet tool install Aspire.Cli --version 13.6.1   # the Aspire version of this package
+dotnet tool install Aspire.Cli --version 13.6.4   # the Aspire version this package builds on
 ```
 
 Commit `.config/dotnet-tools.json`. Then the workflow restores the tool and runs it:
