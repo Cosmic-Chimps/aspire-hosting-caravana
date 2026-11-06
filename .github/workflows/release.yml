@@ -26,9 +26,12 @@ name: release
 # A NuGet version can never be replaced, only unlisted, so the tests run before anything is
 # published, and pushing the same version twice (a rerun of the same tag) is skipped, not an error.
 #
-# Required GitHub secret:
-#   NUGET_API_KEY  an API key from nuget.org with push scope for CosmicChimps.Aspire.Hosting.Caravana
-#                  (a key scoped to another package ID cannot push this one)
+# It pushes to nuget.org with trusted publishing: no stored API key. NuGet/login swaps the run's
+# GitHub OIDC token for a short-lived (about an hour) nuget.org key, just before the pushes. That
+# needs a trusted publishing policy on nuget.org, owned by the jjchiw account, for repository
+# Cosmic-Chimps/aspire-hosting-caravana, workflow release.yml (this file's name: renaming the file
+# or the repository breaks the match), no environment, and package
+# CosmicChimps.Aspire.Hosting.Caravana.
 on:
   workflow_dispatch:
     inputs:
@@ -40,6 +43,7 @@ on:
 
 permissions:
   contents: write # commit the changelog, push the tag, create the release
+  id-token: write # the OIDC token NuGet/login swaps for a nuget.org key
 
 # Two releases never run at once: both would commit to main.
 concurrency:
@@ -145,11 +149,18 @@ jobs:
           dotnet pack src/CosmicChimps.Aspire.Hosting.Caravana/CosmicChimps.Aspire.Hosting.Caravana.csproj
           --configuration Release -p:Version="$VERSION" --output "$RUNNER_TEMP/nuget"
 
+      # Trusted publishing: a short-lived nuget.org key for this run, right before it is used.
+      - name: nuget.org login (trusted publishing)
+        id: nuget_login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: jjchiw # the nuget.org account that owns the policy (profile name, not email)
+
       # --skip-duplicate makes a rerun of the same tag safe: a version already on nuget.org is
       # left as it is.
       - name: push to nuget.org
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
         run: >-
           dotnet nuget push "$RUNNER_TEMP"/nuget/*.nupkg
           --api-key "$NUGET_API_KEY"
@@ -160,7 +171,7 @@ jobs:
         # A symbols failure is not worth failing a release that is already on nuget.org.
         continue-on-error: true
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
         run: >-
           dotnet nuget push "$RUNNER_TEMP"/nuget/*.snupkg
           --api-key "$NUGET_API_KEY"
