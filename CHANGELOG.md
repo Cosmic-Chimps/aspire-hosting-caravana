@@ -12,6 +12,11 @@ release renames it.
 
 ## Unreleased
 
+### Changed
+- Builds on Aspire.Hosting.Docker 13.6.4 (was 13.6.1).
+- The package's version now follows Aspire's: 13.6.x builds on Aspire 13.6, and the last number
+  counts this package's own releases on that line (the previous release was 0.2.0).
+
 ## 0.2.0 - 2026-10-22
 
 ### Added
