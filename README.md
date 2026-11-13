@@ -114,6 +114,7 @@ All take the `caravana` builder and go on any resource (`T : IResource`).
 | `WithCaravanaDomain(caravana, host, port?)` | Routes a public host over HTTPS. `host` is a string or a parameter. Leave `port` out when the service has one port. |
 | `WithCaravanaHealthCheck(caravana, path?, port?)` | The check Nomad runs: HTTP on `path`, or TCP without it. |
 | `WithCaravanaBackup(caravana, engine, schedule?, keep?)` | `Postgres` (a dump) or `Volume` (the volumes archived while the service is stopped for a few seconds). Needs a backup destination in Caravana. |
+| `WithCaravanaScheduledRestore(caravana, from, schedule)` | Restores, on `schedule` (five-field cron, UTC), the service's backup pinned in Caravana under the label `from` (such as `golden`): for instance a demo reset every night. Needs `WithCaravanaBackup` on the same service and a Caravana with scheduled restores (API 0.39.0; an older one ignores it). Until a backup is pinned under the label, the deploy warns and each restore is refused and shown on Caravana's needs-you list. |
 | `WithCaravanaMemory(caravana, reservedMB, maxMB?)` | Written as `mem_reservation` / `mem_limit`. |
 | `WithCaravanaExclude(caravana)` | Leaves the resource out of the app (and its `depends_on` entries). |
 

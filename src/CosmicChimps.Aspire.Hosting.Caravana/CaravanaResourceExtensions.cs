@@ -1,11 +1,12 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
+using System.Text.RegularExpressions;
 using Aspire.Hosting.Pipelines;
 
 namespace CosmicChimps.Aspire.Hosting.Caravana;
 
 /// <summary>Publishing an Aspire application to Caravana.</summary>
-public static class CaravanaResourceExtensions
+public static partial class CaravanaResourceExtensions
 {
     /// <summary>
     /// Makes <c>aspire deploy</c> publish the AppHost to Caravana as one app: each resource a
@@ -212,6 +213,43 @@ public static class CaravanaResourceExtensions
         );
         return resourceBuilder;
     }
+
+    /// <summary>
+    /// Makes Caravana restore, on a schedule, the service's backup pinned under a label (for instance to
+    /// reset a demo every night to a configured state). Pin the backup once in Caravana (the Backups tab, or
+    /// <c>PUT /v1/apps/{id}/backups/{backupId}/pin</c>); until one is pinned, the deploy warns and each
+    /// scheduled restore is refused and shown on Caravana's needs-you list. Needs
+    /// <see cref="WithCaravanaBackup{T}"/> on the same service.
+    /// </summary>
+    /// <param name="from">The label of the pinned backup: lowercase letters, digits and '-', 1 to 32, such as <c>golden</c>.</param>
+    /// <param name="schedule">Five-field cron in UTC, such as <c>0 4 * * *</c>.</param>
+    public static IResourceBuilder<T> WithCaravanaScheduledRestore<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<CaravanaResource> caravana,
+        string from,
+        string schedule
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(caravana);
+        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(schedule);
+        if (!LabelPattern().IsMatch(from))
+            throw new ArgumentException(
+                "A label is 1 to 32 lowercase letters, digits and '-', starting and ending with a letter or digit.",
+                nameof(from)
+            );
+        schedule = schedule.Trim();
+        if (schedule.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 5)
+            throw new ArgumentException("The schedule is a five-field cron expression in UTC, such as 0 4 * * *.", nameof(schedule));
+        caravana.Resource.Annotations.Add(
+            new CaravanaRestoreAnnotation { ServiceName = ServiceName(resourceBuilder), From = from, Schedule = schedule }
+        );
+        return resourceBuilder;
+    }
+
+    [GeneratedRegex("^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")]
+    private static partial Regex LabelPattern();
 
     /// <summary>Reserves memory for the service and optionally lets it burst to a ceiling (in MB).</summary>
     /// <remarks>Written to the Compose file as <c>mem_reservation</c> and <c>mem_limit</c>.</remarks>

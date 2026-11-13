@@ -43,6 +43,12 @@ internal sealed class CaravanaBackupAnnotation : CaravanaServiceAnnotation
     public int? Keep { get; init; }
 }
 
+internal sealed class CaravanaRestoreAnnotation : CaravanaServiceAnnotation
+{
+    public required string From { get; init; }
+    public required string Schedule { get; init; }
+}
+
 internal sealed class CaravanaMemoryAnnotation : CaravanaServiceAnnotation
 {
     public required int ReservedMB { get; init; }

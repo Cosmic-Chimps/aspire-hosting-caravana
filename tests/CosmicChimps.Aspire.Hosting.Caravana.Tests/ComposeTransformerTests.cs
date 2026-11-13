@@ -312,6 +312,24 @@ public class ComposeTransformerTests
     }
 
     [Fact]
+    public void AScheduledRestore_GoesIntoTheOverlaysBackup()
+    {
+        var seq = new CaravanaServiceSettings
+        {
+            BackupEngine = CaravanaBackupEngine.Volume,
+            RestoreFrom = "golden",
+            RestoreSchedule = "0 4 * * *",
+        };
+
+        var result = Run(settings: new() { ["seq"] = seq });
+
+        var backup = result.Services["seq"].Backup;
+        Assert.Equal(new OverlayBackup("volume", null, null, new OverlayRestore("0 4 * * *", "golden")), backup);
+        var json = System.Text.Json.JsonSerializer.Serialize(backup, CaravanaJson.Options);
+        Assert.Contains("\"restore\":{\"schedule\":\"0 4 * * *\",\"from\":\"golden\"}", json);
+    }
+
+    [Fact]
     public void ExcludedResources_AreDropped_WithTheirDependsOn()
     {
         var result = Run(settings: new() { ["cache"] = new() { Exclude = true } });

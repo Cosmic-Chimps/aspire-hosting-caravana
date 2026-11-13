@@ -211,6 +211,10 @@ internal static class CaravanaDeployer
                     s.BackupSchedule = b.Schedule;
                     s.BackupKeep = b.Keep;
                     break;
+                case CaravanaRestoreAnnotation x:
+                    s.RestoreFrom = x.From;
+                    s.RestoreSchedule = x.Schedule;
+                    break;
                 case CaravanaMemoryAnnotation m:
                     s.ReservedMB = m.ReservedMB;
                     s.MaxMB = m.MaxMB;
@@ -220,6 +224,12 @@ internal static class CaravanaDeployer
                     break;
             }
         }
+        // A scheduled restore is part of the service's backup policy in Caravana, so it needs one.
+        foreach (var (name, s) in settings)
+            if (s.RestoreFrom is not null && s.BackupEngine is null)
+                throw new CaravanaDeployException(
+                    $"'{name}' has WithCaravanaScheduledRestore but no WithCaravanaBackup: a scheduled restore restores one of the service's backups."
+                );
         return settings;
     }
 }

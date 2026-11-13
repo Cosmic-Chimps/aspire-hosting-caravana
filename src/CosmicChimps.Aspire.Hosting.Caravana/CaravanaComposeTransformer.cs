@@ -18,6 +18,8 @@ internal sealed record CaravanaServiceSettings
     internal CaravanaBackupEngine? BackupEngine { get; set; }
     internal string? BackupSchedule { get; set; }
     internal int? BackupKeep { get; set; }
+    internal string? RestoreFrom { get; set; }
+    internal string? RestoreSchedule { get; set; }
 
     internal int? ReservedMB { get; set; }
     internal int? MaxMB { get; set; }
@@ -558,7 +560,10 @@ internal static partial class CaravanaComposeTransformer
             backup = new OverlayBackup(
                 engine == CaravanaBackupEngine.Postgres ? "postgres" : "volume",
                 settings.BackupSchedule,
-                settings.BackupKeep
+                settings.BackupKeep,
+                settings.RestoreFrom is { } from && settings.RestoreSchedule is { } schedule
+                    ? new OverlayRestore(schedule, from)
+                    : null
             );
 
         return new ComposeOverlay

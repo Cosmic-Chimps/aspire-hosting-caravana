@@ -52,7 +52,14 @@ internal sealed record OverlaySecret(
 internal sealed record OverlayBackup(
     [property: JsonPropertyName("engine")] string Engine,
     [property: JsonPropertyName("schedule")] string? Schedule,
-    [property: JsonPropertyName("keep")] int? Keep
+    [property: JsonPropertyName("keep")] int? Keep,
+    [property: JsonPropertyName("restore")] OverlayRestore? Restore = null
+);
+
+/// <summary>A restore of the backup pinned under <see cref="From"/>, on <see cref="Schedule"/>.</summary>
+internal sealed record OverlayRestore(
+    [property: JsonPropertyName("schedule")] string Schedule,
+    [property: JsonPropertyName("from")] string From
 );
 
 internal static class CaravanaJson

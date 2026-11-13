@@ -23,7 +23,9 @@ public class ResourceSettingsTests
             .WithCaravanaDomain(caravana, "www.example.com")
             .WithCaravanaHealthCheck(caravana, "/health", 8080)
             .WithCaravanaMemory(caravana, 256, 512);
-        db.WithCaravanaBackup(caravana, CaravanaBackupEngine.Postgres, "0 2 * * *", 3).WithCaravanaExclude(caravana);
+        db.WithCaravanaBackup(caravana, CaravanaBackupEngine.Postgres, "0 2 * * *", 3)
+            .WithCaravanaScheduledRestore(caravana, "golden", " 0 4 * * * ")
+            .WithCaravanaExclude(caravana);
 
         var settings = await CaravanaDeployer.CollectSettingsAsync(caravana.Resource, Ct);
 
@@ -40,7 +42,23 @@ public class ResourceSettingsTests
         Assert.Equal(CaravanaBackupEngine.Postgres, d.BackupEngine);
         Assert.Equal("0 2 * * *", d.BackupSchedule);
         Assert.Equal(3, d.BackupKeep);
+        Assert.Equal("golden", d.RestoreFrom);
+        Assert.Equal("0 4 * * *", d.RestoreSchedule);
         Assert.True(d.Exclude);
+        Assert.Null(w.RestoreFrom);
+    }
+
+    [Fact]
+    public async Task AScheduledRestoreWithoutABackup_IsRefused()
+    {
+        var builder = DistributedApplication.CreateBuilder(["--operation", "publish"]);
+        var caravana = builder.PublishToCaravana("shop");
+        builder.AddContainer("web", "nginx").WithCaravanaScheduledRestore(caravana, "golden", "0 4 * * *");
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => CaravanaDeployer.CollectSettingsAsync(caravana.Resource, Ct));
+
+        Assert.Contains("'web'", ex.Message);
+        Assert.Contains("WithCaravanaBackup", ex.Message);
     }
 
     [Fact]
@@ -65,6 +83,10 @@ public class ResourceSettingsTests
         Assert.Throws<ArgumentOutOfRangeException>(() => web.WithCaravanaMemory(caravana, 512, 256));
         Assert.Throws<ArgumentOutOfRangeException>(() => web.WithCaravanaBackup(caravana, CaravanaBackupEngine.Volume, keep: 0));
         Assert.Throws<ArgumentException>(() => web.WithCaravanaHealthCheck(caravana, "health"));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaScheduledRestore(caravana, "Golden", "0 4 * * *"));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaScheduledRestore(caravana, "golden-", "0 4 * * *"));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaScheduledRestore(caravana, "golden", "daily"));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaScheduledRestore(caravana, "golden", "0 0 4 * * *"));
         Assert.Throws<ArgumentOutOfRangeException>(() => web.WithCaravanaDomain(caravana, "a.example.com", port: 70000));
     }
 
