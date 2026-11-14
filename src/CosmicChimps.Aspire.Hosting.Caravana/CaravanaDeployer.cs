@@ -215,6 +215,17 @@ internal static class CaravanaDeployer
                     s.RestoreFrom = x.From;
                     s.RestoreSchedule = x.Schedule;
                     break;
+                case CaravanaIdentityAnnotation i:
+                    if (s.Identities.Any(x => x.Name == i.Name))
+                        throw new CaravanaDeployException(
+                            $"'{i.ServiceName}' has two identities named '{i.Name}': each WithCaravanaIdentity needs its own name."
+                        );
+                    if (s.Identities.Count >= CaravanaResourceExtensions.MaxIdentities)
+                        throw new CaravanaDeployException(
+                            $"'{i.ServiceName}' has more than {CaravanaResourceExtensions.MaxIdentities} identities: Caravana allows {CaravanaResourceExtensions.MaxIdentities} per service."
+                        );
+                    s.Identities.Add(new OverlayIdentity(i.Name, i.Audience, i.TtlSeconds));
+                    break;
                 case CaravanaMemoryAnnotation m:
                     s.ReservedMB = m.ReservedMB;
                     s.MaxMB = m.MaxMB;

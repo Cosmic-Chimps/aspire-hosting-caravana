@@ -17,6 +17,14 @@ release renames it.
   under the label `from` on `schedule`, for instance to reset a demo to a configured state every night. It
   needs `WithCaravanaBackup` on the same service (publishing says so otherwise) and a Caravana with
   scheduled restores (API 0.39.0): an older one ignores the field, so nothing would be restored.
+- `WithCaravanaIdentity(caravana, name, audience, ttl?)`: Caravana gives each copy of the service a Nomad
+  workload identity, a signed token for the audience in `/secrets/nomad_<name>.jwt` that Nomad renews, so the
+  service can prove who it is to another system without a stored secret. Up to 4 identities per service,
+  each with its own name (publishing says so when a name repeats or a fifth is added). It needs a Caravana
+  with workload identities (API 0.41.0, Caravana spec 038): an older one ignores the field, so the file
+  would never appear. The publisher never reads or stores the token.
+- `WithCaravanaBellaIdentity(caravana, environmentId, ttl?)`: the same with the name `bella` and the audience
+  `bella-spiffe/<environmentId>`, which Bella Baxter recommends for its environment.
 
 ## 13.6.4 - 2026-11-06
 

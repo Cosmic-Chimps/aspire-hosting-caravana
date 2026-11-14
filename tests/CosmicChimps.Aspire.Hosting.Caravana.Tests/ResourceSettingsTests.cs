@@ -1,5 +1,6 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
+using CosmicChimps.Aspire.Hosting.Caravana.Models;
 using Xunit;
 
 namespace CosmicChimps.Aspire.Hosting.Caravana.Tests;
@@ -59,6 +60,88 @@ public class ResourceSettingsTests
 
         Assert.Contains("'web'", ex.Message);
         Assert.Contains("WithCaravanaBackup", ex.Message);
+    }
+
+    [Fact]
+    public async Task Identities_AreCollectedInOrder_WithTheBellaShorthand()
+    {
+        var builder = DistributedApplication.CreateBuilder(["--operation", "publish"]);
+        var caravana = builder.PublishToCaravana("shop");
+        builder
+            .AddContainer("web", "nginx")
+            .WithCaravanaBellaIdentity(caravana, "env-123")
+            .WithCaravanaIdentity(caravana, "other", ["a", "b"], TimeSpan.FromMinutes(10));
+
+        var settings = await CaravanaDeployer.CollectSettingsAsync(caravana.Resource, Ct);
+
+        Assert.Equal(
+            [
+                new OverlayIdentity("bella", ["bella-spiffe/env-123"]),
+                new OverlayIdentity("other", ["a", "b"], 600),
+            ],
+            settings["web"].Identities,
+            new IdentityComparer()
+        );
+    }
+
+    [Fact]
+    public async Task ADuplicateIdentityName_IsRefusedAtPublish()
+    {
+        var builder = DistributedApplication.CreateBuilder(["--operation", "publish"]);
+        var caravana = builder.PublishToCaravana("shop");
+        builder.AddContainer("web", "nginx").WithCaravanaIdentity(caravana, "bella", ["a"]).WithCaravanaBellaIdentity(caravana, "env-1");
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => CaravanaDeployer.CollectSettingsAsync(caravana.Resource, Ct));
+
+        Assert.Contains("'web'", ex.Message);
+        Assert.Contains("'bella'", ex.Message);
+    }
+
+    [Fact]
+    public async Task AFifthIdentity_IsRefusedAtPublish()
+    {
+        var builder = DistributedApplication.CreateBuilder(["--operation", "publish"]);
+        var caravana = builder.PublishToCaravana("shop");
+        var web = builder.AddContainer("web", "nginx");
+        for (var i = 1; i <= 5; i++)
+            web.WithCaravanaIdentity(caravana, $"id{i}", ["a"]);
+
+        var ex = await Assert.ThrowsAsync<CaravanaDeployException>(() => CaravanaDeployer.CollectSettingsAsync(caravana.Resource, Ct));
+
+        Assert.Contains("'web'", ex.Message);
+        Assert.Contains("4", ex.Message);
+    }
+
+    [Fact]
+    public void BadIdentities_AreRefusedWhenTheModelIsBuilt()
+    {
+        var builder = DistributedApplication.CreateBuilder(["--operation", "publish"]);
+        var caravana = builder.PublishToCaravana("shop");
+        var web = builder.AddContainer("web", "nginx");
+
+        foreach (var name in new[] { "", "Bella", "1bella", "bel-la", "default", "vault_x", "consul_x", new string('a', 31) })
+            Assert.Throws<ArgumentException>(() => web.WithCaravanaIdentity(caravana, name, ["a"]));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaIdentity(caravana, "bella", []));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaIdentity(caravana, "bella", ["1", "2", "3", "4", "5"]));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaIdentity(caravana, "bella", ["has space"]));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaIdentity(caravana, "bella", [""]));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaIdentity(caravana, "bella", ["caf\u00e9"]));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaIdentity(caravana, "bella", [new string('a', 256)]));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaIdentity(caravana, "bella", ["a"], TimeSpan.FromMilliseconds(60500)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => web.WithCaravanaIdentity(caravana, "bella", ["a"], TimeSpan.FromSeconds(59)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => web.WithCaravanaIdentity(caravana, "bella", ["a"], TimeSpan.FromSeconds(86401)));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaBellaIdentity(caravana, "has space"));
+        Assert.Throws<ArgumentException>(() => web.WithCaravanaBellaIdentity(caravana, new string('a', 243)));
+        web.WithCaravanaIdentity(caravana, "ok", [new string('a', 255)], TimeSpan.FromSeconds(86400));
+        web.WithCaravanaBellaIdentity(caravana, new string('a', 242));
+    }
+
+    private sealed class IdentityComparer : IEqualityComparer<OverlayIdentity>
+    {
+        public bool Equals(OverlayIdentity? x, OverlayIdentity? y) =>
+            x is not null && y is not null && x.Name == y.Name && x.TtlSeconds == y.TtlSeconds && x.Audience.SequenceEqual(y.Audience);
+
+        public int GetHashCode(OverlayIdentity obj) => obj.Name.GetHashCode();
     }
 
     [Fact]

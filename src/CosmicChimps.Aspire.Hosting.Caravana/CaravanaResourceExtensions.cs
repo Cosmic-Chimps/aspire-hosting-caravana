@@ -251,6 +251,112 @@ public static partial class CaravanaResourceExtensions
     [GeneratedRegex("^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")]
     private static partial Regex LabelPattern();
 
+    /// <summary>The identities Caravana allows on one service.</summary>
+    internal const int MaxIdentities = 4;
+
+    /// <summary>
+    /// Asks Caravana for a Nomad workload identity for each copy of the service: Nomad writes a signed
+    /// token for the audience to <c>/secrets/nomad_{name}.jwt</c> in the copy and renews it, so the service
+    /// can prove who it is to another system (a secrets service, for instance) without a stored secret.
+    /// The publisher never reads or stores the token. Call it again for another identity (at most 4 per
+    /// service, each with its own name). Needs a Caravana with workload identities (API 0.41.0; an older
+    /// one ignores the field, so the file would never appear).
+    /// </summary>
+    /// <param name="name">Lowercase letters, digits and '_', starting with a letter, 1 to 30, such as <c>bella</c>. Not <c>default</c>, and not starting with <c>vault_</c> or <c>consul_</c>.</param>
+    /// <param name="audience">What the token is for: 1 to 4 values of 1 to 255 printable ASCII characters, no spaces.</param>
+    /// <param name="ttl">How long a token lives before Nomad renews it: whole seconds, 1 minute to 24 hours. Leave it out for Caravana's default (1 hour).</param>
+    public static IResourceBuilder<T> WithCaravanaIdentity<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<CaravanaResource> caravana,
+        string name,
+        IEnumerable<string> audience,
+        TimeSpan? ttl = null
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(caravana);
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(audience);
+        if (!IdentityNamePattern().IsMatch(name))
+            throw new ArgumentException(
+                "An identity name is 1 to 30 lowercase letters, digits and '_', starting with a letter.",
+                nameof(name)
+            );
+        if (name == "default" || name.StartsWith("vault_", StringComparison.Ordinal) || name.StartsWith("consul_", StringComparison.Ordinal))
+            throw new ArgumentException(
+                "An identity name can't be 'default' or start with 'vault_' or 'consul_': Nomad uses those.",
+                nameof(name)
+            );
+        var values = audience.ToList();
+        if (values.Count is < 1 or > 4)
+            throw new ArgumentException("An identity has 1 to 4 audience values.", nameof(audience));
+        foreach (var value in values)
+            CheckAudienceValue(value, nameof(audience));
+        int? ttlSeconds = null;
+        if (ttl is { } t)
+        {
+            if (t.Ticks % TimeSpan.TicksPerSecond != 0)
+                throw new ArgumentException("The ttl is a whole number of seconds.", nameof(ttl));
+            if (t < TimeSpan.FromSeconds(60) || t > TimeSpan.FromSeconds(86400))
+                throw new ArgumentOutOfRangeException(nameof(ttl), "The ttl is between 1 minute and 24 hours.");
+            ttlSeconds = (int)t.TotalSeconds;
+        }
+        caravana.Resource.Annotations.Add(
+            new CaravanaIdentityAnnotation
+            {
+                ServiceName = ServiceName(resourceBuilder),
+                Name = name,
+                Audience = values,
+                TtlSeconds = ttlSeconds,
+            }
+        );
+        return resourceBuilder;
+    }
+
+    /// <summary>
+    /// Shorthand for <see cref="WithCaravanaIdentity{T}"/> with the identity Bella Baxter asks for: the name
+    /// <c>bella</c> and the audience <c>bella-spiffe/{environmentId}</c>, so the service finds its token in
+    /// <c>/secrets/nomad_bella.jwt</c>.
+    /// </summary>
+    /// <param name="environmentId">The id of the Bella environment, as its page recommends the audience for.</param>
+    /// <param name="ttl">As for <see cref="WithCaravanaIdentity{T}"/>.</param>
+    public static IResourceBuilder<T> WithCaravanaBellaIdentity<T>(
+        this IResourceBuilder<T> resourceBuilder,
+        IResourceBuilder<CaravanaResource> caravana,
+        string environmentId,
+        TimeSpan? ttl = null
+    )
+        where T : IResource
+    {
+        ArgumentNullException.ThrowIfNull(environmentId);
+        var audience = "bella-spiffe/" + environmentId;
+        try
+        {
+            CheckAudienceValue(audience, nameof(environmentId));
+        }
+        catch (ArgumentException)
+        {
+            throw new ArgumentException(
+                "The environment id must make a valid audience: bella-spiffe/ and the id together are 1 to 255 printable ASCII characters, no spaces.",
+                nameof(environmentId)
+            );
+        }
+        return resourceBuilder.WithCaravanaIdentity(caravana, "bella", [audience], ttl);
+    }
+
+    private static void CheckAudienceValue(string value, string paramName)
+    {
+        ArgumentNullException.ThrowIfNull(value, paramName);
+        if (value.Length is < 1 or > 255 || value.Any(c => c < '!' || c > '~'))
+            throw new ArgumentException(
+                "An audience value is 1 to 255 printable ASCII characters, no spaces.",
+                paramName
+            );
+    }
+
+    [GeneratedRegex("^[a-z][a-z0-9_]{0,29}$")]
+    private static partial Regex IdentityNamePattern();
+
     /// <summary>Reserves memory for the service and optionally lets it burst to a ceiling (in MB).</summary>
     /// <remarks>Written to the Compose file as <c>mem_reservation</c> and <c>mem_limit</c>.</remarks>
     public static IResourceBuilder<T> WithCaravanaMemory<T>(

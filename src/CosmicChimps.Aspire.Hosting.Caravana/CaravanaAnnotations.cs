@@ -49,6 +49,13 @@ internal sealed class CaravanaRestoreAnnotation : CaravanaServiceAnnotation
     public required string Schedule { get; init; }
 }
 
+internal sealed class CaravanaIdentityAnnotation : CaravanaServiceAnnotation
+{
+    public required string Name { get; init; }
+    public required IReadOnlyList<string> Audience { get; init; }
+    public int? TtlSeconds { get; init; }
+}
+
 internal sealed class CaravanaMemoryAnnotation : CaravanaServiceAnnotation
 {
     public required int ReservedMB { get; init; }

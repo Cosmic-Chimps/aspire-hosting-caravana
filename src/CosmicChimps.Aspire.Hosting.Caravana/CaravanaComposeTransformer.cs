@@ -21,6 +21,8 @@ internal sealed record CaravanaServiceSettings
     internal string? RestoreFrom { get; set; }
     internal string? RestoreSchedule { get; set; }
 
+    internal List<OverlayIdentity> Identities { get; } = [];
+
     internal int? ReservedMB { get; set; }
     internal int? MaxMB { get; set; }
 
@@ -572,6 +574,7 @@ internal static partial class CaravanaComposeTransformer
             Health = health,
             Secrets = secrets is { Count: > 0 } ? secrets : null,
             Backup = backup,
+            Identities = settings is { Identities.Count: > 0 } ? settings.Identities : null,
         };
     }
 

@@ -27,7 +27,11 @@ internal sealed record ComposeOverlay
     [JsonPropertyName("backup")]
     public OverlayBackup? Backup { get; init; }
 
-    internal bool IsEmpty => Domains is null && Health is null && Secrets is null && Backup is null;
+    [JsonPropertyName("identities")]
+    public List<OverlayIdentity>? Identities { get; init; }
+
+    internal bool IsEmpty =>
+        Domains is null && Health is null && Secrets is null && Backup is null && Identities is null;
 }
 
 internal sealed record OverlayDomain(
@@ -60,6 +64,17 @@ internal sealed record OverlayBackup(
 internal sealed record OverlayRestore(
     [property: JsonPropertyName("schedule")] string Schedule,
     [property: JsonPropertyName("from")] string From
+);
+
+/// <summary>
+/// A Nomad workload identity for each copy of the service: Nomad writes a signed token for
+/// <see cref="Audience"/> to <c>/secrets/nomad_{name}.jwt</c> and renews it. <see cref="TtlSeconds"/> is
+/// left out for Caravana's default.
+/// </summary>
+internal sealed record OverlayIdentity(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("audience")] IReadOnlyList<string> Audience,
+    [property: JsonPropertyName("ttlSeconds")] int? TtlSeconds = null
 );
 
 internal static class CaravanaJson

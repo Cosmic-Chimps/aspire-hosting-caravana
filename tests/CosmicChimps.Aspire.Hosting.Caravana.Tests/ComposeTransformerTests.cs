@@ -330,6 +330,22 @@ public class ComposeTransformerTests
     }
 
     [Fact]
+    public void Identities_GoIntoTheOverlay_WithTheTtlLeftOutWhenNull()
+    {
+        var web = new CaravanaServiceSettings();
+        web.Identities.Add(new OverlayIdentity("bella", ["bella-spiffe/env-1"]));
+        web.Identities.Add(new OverlayIdentity("other", ["a", "b"], 600));
+
+        var result = Run(settings: new() { ["webfrontend"] = web });
+
+        var overlay = result.Services["webfrontend"];
+        Assert.Equal(2, overlay.Identities!.Count);
+        var json = System.Text.Json.JsonSerializer.Serialize(overlay, CaravanaJson.Options);
+        Assert.Contains("\"identities\":[{\"name\":\"bella\",\"audience\":[\"bella-spiffe/env-1\"]},", json);
+        Assert.Contains("{\"name\":\"other\",\"audience\":[\"a\",\"b\"],\"ttlSeconds\":600}]", json);
+    }
+
+    [Fact]
     public void ExcludedResources_AreDropped_WithTheirDependsOn()
     {
         var result = Run(settings: new() { ["cache"] = new() { Exclude = true } });
