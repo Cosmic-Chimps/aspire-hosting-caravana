@@ -260,7 +260,7 @@ public static partial class CaravanaResourceExtensions
     /// can prove who it is to another system (a secrets service, for instance) without a stored secret.
     /// The publisher never reads or stores the token. Call it again for another identity (at most 4 per
     /// service, each with its own name). Needs a Caravana with workload identities (API 0.41.0; an older
-    /// one ignores the field, so the file would never appear).
+    /// one refuses the deploy, naming the unknown field).
     /// </summary>
     /// <param name="name">Lowercase letters, digits and '_', starting with a letter, 1 to 30, such as <c>bella</c>. Not <c>default</c>, and not starting with <c>vault_</c> or <c>consul_</c>.</param>
     /// <param name="audience">What the token is for: 1 to 4 values of 1 to 255 printable ASCII characters, no spaces.</param>
