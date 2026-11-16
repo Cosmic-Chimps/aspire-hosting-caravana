@@ -12,6 +12,8 @@ release renames it.
 
 ## Unreleased
 
+## 13.6.5 - 2026-11-16
+
 ### Added
 - `WithCaravanaScheduledRestore(caravana, from, schedule)`: Caravana restores the service's backup pinned
   under the label `from` on `schedule`, for instance to reset a demo to a configured state every night. It
