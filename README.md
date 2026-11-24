@@ -18,6 +18,9 @@ Run it again and the same app is updated.
 - Caravana 0.9.0 or later (its API 0.21 accepts what Aspire writes: a network and volumes with
   `driver`, and `entrypoint`).
 - A container registry both `aspire deploy` can push to and Caravana can pull from.
+- For `AsCaravanaProviderSecret`: Caravana 0.21.0 or later with a secret provider set up, and the release
+  with secret templates (API 0.59.0) when a parameter is used inside a longer value. See
+  [Secrets from a Caravana secret provider](#secrets-from-a-caravana-secret-provider).
 
 ## Install
 
@@ -137,6 +140,59 @@ them as environment variables. The Compose file Caravana keeps has no secret val
 - The token only goes in the `Authorization` header. Error bodies are redacted before they are logged or
   thrown.
 - `ToString()` of a value prints `<parameter:name>`, never the content.
+
+## Secrets from a Caravana secret provider
+
+A secret doesn't have to pass through the machine that runs `aspire deploy`. If Caravana has a secret
+provider (Bella Baxter, under Settings > Secret providers), mark
+the parameter with `AsCaravanaProviderSecret(provider, path)` and the publisher sends a **reference**, never a
+value: Caravana reads the secret from the provider when it deploys.
+
+```csharp
+// "bella-prod" is the provider's name in Caravana; the path is the secret's name in Bella, given as it is
+// there (Bella refuses '-', which Aspire parameter names use, so it is never taken from the parameter).
+var dbPassword = builder.AddParameter("db-password", secret: true)
+    .AsCaravanaProviderSecret("bella-prod", "DB_PASSWORD");
+
+var db = builder.AddPostgres("postgres", password: dbPassword);
+
+builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26.4")
+    .WithEnvironment("KC_DB_PASSWORD", dbPassword);          // the whole value
+
+builder.AddProject<Projects.Banana_Api>("api")
+    .WithReference(db);                                      // ConnectionStrings__postgres holds it inside a connection string
+```
+
+The Compose file Aspire writes uses the parameter in both ways. The request's overlay becomes:
+
+```json
+"keycloak": { "secrets": [
+  { "name": "KC_DB_PASSWORD", "from": { "provider": "bella-prod", "path": "DB_PASSWORD" } } ] },
+"api": { "secrets": [
+  { "name": "ConnectionStrings__postgres",
+    "template": "Host=postgres;Port=5432;Username=postgres;Password=${db_password};Database=banana",
+    "refs": { "db_password": { "provider": "bella-prod", "path": "DB_PASSWORD" } } } ] }
+```
+
+- A value that is exactly the parameter is a `from` reference. A value that holds it among other text is a
+  `template`, in which each use is `${name}` and every other dollar sign of the text is written `$$`.
+- The parameter has no value in the publisher. While Aspire publishes it holds a random stand-in for the run,
+  whatever your configuration, user secrets or environment say, so **Aspire never asks for it** and a value
+  you set for it is never read or sent. While the AppHost runs locally (F5) the parameter is the one you set,
+  as usual. The stand-in is replaced before anything is sent, and the deploy stops if one is left anywhere.
+- A value that mixes the parameter with a typed secret (another `secret: true` parameter without
+  `AsCaravanaProviderSecret`) fails, naming the service and the variable: make both references, or give the
+  typed one its own variable. Using the parameter in a `command`, a label or any field that isn't an
+  environment value fails too, naming where.
+- **Needs Caravana 0.21.0 or later** for a whole-value reference, and a Caravana with secret templates (the
+  release with API 0.59.0) when the parameter is part of a longer value. Caravana's API ignores fields it
+  doesn't know, so an older one would drop them and leave the secret empty: the publisher reads the version
+  from `GET /v1/health` first and refuses the deploy, before anything is sent, when it is too old. A `dev`
+  build of Caravana can't be compared and is allowed, with a warning.
+- When a value changes in Bella, **Refresh secrets** on the app's Variables page in Caravana's console (or
+  `POST /v1/apps/{id}/secrets/refresh`) reads every reference again and rolls the running version out with
+  the new values, without a deploy from here. The reference itself (provider and path) is what `aspire deploy`
+  keeps up to date.
 
 ## Volumes
 

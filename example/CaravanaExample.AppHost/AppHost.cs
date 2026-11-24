@@ -27,6 +27,9 @@ var caravana = builder.PublishToCaravana("shop", s =>
 
 // A secret parameter: its value reaches Caravana as a secret, never inside the Compose file.
 var redisPassword = builder.AddParameter("redis-password", secret: true);
+// With a secret provider set up in Caravana (Settings > Secret providers), the publisher can send a reference
+// instead of the value, and Aspire never asks for it:
+//   .AsCaravanaProviderSecret("bella-prod", "REDIS_PASSWORD");
 var cache = builder.AddRedis("cache", password: redisPassword);
 
 // A container with a data volume: it becomes a Caravana volume that survives redeploys.

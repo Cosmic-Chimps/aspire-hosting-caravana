@@ -12,6 +12,19 @@ release renames it.
 
 ## Unreleased
 
+### Added
+- `AsCaravanaProviderSecret(provider, path)` on a parameter: the secret stays in a Caravana secret provider
+  (Bella Baxter) and the publisher sends a reference, never a value. An environment value that is the parameter
+  becomes `{name, from: {provider, path}}`; one that holds it among other text, such as a connection string,
+  becomes `{name, template: "...Password=${db_password}...", refs: {...}}`. The parameter has a random
+  per-run stand-in value while Aspire publishes, whatever your configuration says, so Aspire never prompts for
+  it and a real value you set is never sent; the stand-in is replaced before anything is sent. A value that
+  mixes it with a typed secret, or a use in a command, label or other field, fails the deploy naming where.
+  "Refresh secrets" in Caravana's console rotates the values without a deploy.
+  It needs Caravana 0.21.0 (secret providers) and, for a parameter inside a longer value, the release with
+  secret templates (API 0.59.0): the publisher reads Caravana's version from `/v1/health` and refuses before
+  sending anything when it is older, since Caravana's API ignores fields it doesn't know.
+
 ## 13.6.5 - 2026-11-16
 
 ### Added
