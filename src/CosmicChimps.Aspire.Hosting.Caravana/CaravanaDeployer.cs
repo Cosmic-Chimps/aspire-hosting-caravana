@@ -31,26 +31,7 @@ internal static class CaravanaDeployer
             envValues.Count
         );
 
-        var secrets = await ResolveSecretsAsync(ctx.Model.Resources, envValues, ct);
-        redactor.Add(secrets.Values);
-
-        var settings = await CollectSettingsAsync(resource, ct);
-
-        var transformed = CaravanaComposeTransformer.Transform(
-            new TransformInput(composeYaml, envValues, secrets, resource.DeployDashboard, settings)
-        );
-        foreach (var warning in transformed.Warnings)
-            logger.LogWarning("{Warning}", redactor.Redact(warning));
-        if (!transformed.Success)
-            throw new CaravanaDeployException(
-                "The Compose file can't be sent to Caravana:" + string.Concat(transformed.Errors.Select(e => "\n  - " + redactor.Redact(e)))
-            );
-
-        var request = new ComposeRequest(
-            transformed.Compose!,
-            string.IsNullOrWhiteSpace(resource.DisplayName) ? null : resource.DisplayName,
-            transformed.Services
-        );
+        var request = await BuildRequestAsync(resource, ctx.Model.Resources, composeYaml, envValues, logger, redactor, ct);
         var plan = new DeployPlan(
             resource.Project,
             resource.Environment,
@@ -66,8 +47,8 @@ internal static class CaravanaDeployer
         logger.LogInformation(
             "Deploying '{App}' to Caravana ({Services} services, {Secrets} secrets)",
             CaravanaPlace.AppId(plan.Project, plan.Environment, plan.AppName),
-            transformed.Services.Count,
-            transformed.Services.Values.Sum(s => s.Secrets?.Count ?? 0)
+            request.Services.Count,
+            request.Services.Values.Sum(s => s.Secrets?.Count ?? 0)
         );
 
         using var http = new HttpClient { BaseAddress = new Uri(resource.Url.TrimEnd('/') + "/") };
@@ -90,6 +71,85 @@ internal static class CaravanaDeployer
             await task.CompleteAsync(redactor.Redact(ex.Message), CompletionState.CompletedWithError, ct);
             throw ex is CaravanaDeployException ? ex : new CaravanaDeployException($"Could not reach Caravana: {redactor.Redact(ex.Message)}");
         }
+    }
+
+    /// <summary>
+    /// Resolves the secrets, transforms what Aspire wrote and makes the request. A provider secret's
+    /// stand-in replaces whatever value the .env file holds for it, and no real value is read for it.
+    /// </summary>
+    internal static async Task<ComposeRequest> BuildRequestAsync(
+        CaravanaResource resource,
+        IEnumerable<IResource> resources,
+        string composeYaml,
+        Dictionary<string, string> envValues,
+        ILogger logger,
+        SecretRedactor redactor,
+        CancellationToken ct
+    )
+    {
+        var resourceList = resources.ToList();
+
+        var providerSecrets = await ResolveProviderSecretsAsync(resourceList, ct);
+        redactor.Add(providerSecrets.Select(p => p.Sentinel));
+        foreach (var provider in providerSecrets)
+            envValues[EnvName(provider.ParameterName)] = provider.Sentinel;
+
+        var secrets = await ResolveSecretsAsync(resourceList, envValues, ct);
+        redactor.Add(secrets.Values);
+
+        var settings = await CollectSettingsAsync(resource, ct);
+
+        var transformed = CaravanaComposeTransformer.Transform(
+            new TransformInput(composeYaml, envValues, secrets, resource.DeployDashboard, settings, providerSecrets)
+        );
+        foreach (var warning in transformed.Warnings)
+            logger.LogWarning("{Warning}", redactor.Redact(warning));
+        if (!transformed.Success)
+            throw new CaravanaDeployException(
+                "The Compose file can't be sent to Caravana:" + string.Concat(transformed.Errors.Select(e => "\n  - " + redactor.Redact(e)))
+            );
+
+        return new ComposeRequest(
+            transformed.Compose!,
+            string.IsNullOrWhiteSpace(resource.DisplayName) ? null : resource.DisplayName,
+            transformed.Services
+        );
+    }
+
+    /// <summary>
+    /// The parameters marked with <c>AsCaravanaProviderSecret</c>. Each must hold its stand-in: if Aspire
+    /// gives it any other value, the real value was read, and the deploy stops before it can travel.
+    /// </summary>
+    internal static async Task<List<ProviderSecret>> ResolveProviderSecretsAsync(
+        IEnumerable<IResource> resources,
+        CancellationToken ct
+    )
+    {
+        var found = new List<ProviderSecret>();
+        foreach (var parameter in resources.OfType<ParameterResource>())
+        {
+            if (parameter.Annotations.OfType<CaravanaProviderSecretAnnotation>().FirstOrDefault() is not { } mark)
+                continue;
+
+            string? value = null;
+            try
+            {
+                value = await parameter.GetValueAsync(ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Not publishing, or not initialised: the stand-in is the value either way.
+            }
+            if (value is not null && value != mark.Sentinel)
+                throw new CaravanaDeployException(
+                    $"Parameter '{parameter.Name}' is a reference to a secret provider (AsCaravanaProviderSecret), but Aspire gave it "
+                        + "another value. Nothing was sent: the publisher never sends a value for such a parameter. "
+                        + "Run this as a deploy or publish (not while the AppHost runs locally)."
+                );
+
+            found.Add(new ProviderSecret(parameter.Name, mark.Provider, mark.Path, mark.Sentinel));
+        }
+        return found;
     }
 
     private static void Validate(CaravanaResource resource, ILogger logger)
@@ -151,6 +211,10 @@ internal static class CaravanaDeployer
         var secrets = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var parameter in resources.OfType<ParameterResource>().Where(p => p.Secret))
         {
+            // A provider secret has no value here: its stand-in is handled apart.
+            if (parameter.Annotations.OfType<CaravanaProviderSecretAnnotation>().Any())
+                continue;
+
             var key = EnvName(parameter.Name);
             if (envValues.TryGetValue(key, out var fromEnv) && fromEnv.Length > 0)
             {

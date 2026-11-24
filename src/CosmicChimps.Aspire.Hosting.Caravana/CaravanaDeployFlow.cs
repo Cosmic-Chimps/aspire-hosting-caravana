@@ -32,6 +32,9 @@ internal sealed class CaravanaDeployFlow(CaravanaApiClient api, SecretRedactor r
     {
         var appId = CaravanaPlace.AppId(plan.Project, plan.Environment, plan.AppName);
 
+        // Before anything is written: an older Caravana ignores fields it doesn't know.
+        await CheckServerAsync(plan, ct);
+
         var placeIsGuaranteed = await EnsurePlaceAsync(plan, ct);
 
         var accepted = await DeployAsync(plan, appId, placeIsGuaranteed, ct);
@@ -74,6 +77,60 @@ internal sealed class CaravanaDeployFlow(CaravanaApiClient api, SecretRedactor r
 
                 return await FollowSupersededAsync(plan, appId, final, failure, waiter, waitTime, ct);
         }
+    }
+
+    /// <summary>
+    /// A request with secret references or templates needs a Caravana that reads them: its API answers
+    /// 200 to an unknown field and drops it, which would leave the secret with no value. So the version is
+    /// read first (from <c>GET /v1/health</c>, no token needed) and the deploy refused when it is too old.
+    /// A <c>dev</c> build can't be told: it is allowed, with a warning.
+    /// </summary>
+    private async Task CheckServerAsync(DeployPlan plan, CancellationToken ct)
+    {
+        var (minimum, what) = RequiredVersion(plan.Body);
+        if (minimum is null)
+            return;
+
+        string? running;
+        try
+        {
+            running = await api.GetVersionAsync(ct);
+        }
+        catch (Exception ex) when (ex is CaravanaApiException or HttpRequestException)
+        {
+            var text = ex is CaravanaApiException apiError ? apiError.Describe() : ex.Message;
+            throw new CaravanaDeployException(
+                $"This deploy sends {what}, so the publisher has to know Caravana's version first, and could not read it "
+                    + $"({redactor.Redact(text)}). Nothing was sent."
+            );
+        }
+
+        if (!CaravanaVersions.TryParse(running, out _))
+        {
+            logger.LogWarning(
+                "Caravana reports the version '{Version}', which can't be compared: assuming it supports {What}.",
+                redactor.Redact(running),
+                what
+            );
+            return;
+        }
+
+        if (!CaravanaVersions.IsAtLeast(running, minimum))
+            throw new CaravanaDeployException(
+                $"This deploy sends {what}, which needs Caravana {minimum} or later; this one is {redactor.Redact(running)}. "
+                    + "An older Caravana would ignore it and leave the secret without a value. Nothing was sent: update Caravana first."
+            );
+    }
+
+    /// <summary>The oldest Caravana that understands the request, and what in it needs that, or null when any does.</summary>
+    internal static (Version? Minimum, string What) RequiredVersion(ComposeRequest body)
+    {
+        var secrets = body.Services.Values.SelectMany(s => s.Secrets ?? []).ToList();
+        if (secrets.Any(s => s.Template is not null || s.Refs is not null))
+            return (CaravanaVersions.MinForSecretTemplates, "secret templates");
+        if (secrets.Any(s => s.From is not null))
+            return (CaravanaVersions.MinForProviderReferences, "secrets read from a secret provider");
+        return (null, "");
     }
 
     /// <summary>

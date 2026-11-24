@@ -29,12 +29,22 @@ internal sealed record CaravanaServiceSettings
     internal bool Exclude { get; set; }
 }
 
+/// <summary>
+/// A parameter whose value Caravana reads from a secret provider. <see cref="Sentinel"/> is what Aspire wrote
+/// wherever the parameter is used; the transformer replaces it by a reference.
+/// </summary>
+internal sealed record ProviderSecret(string ParameterName, string Provider, string Path, string Sentinel)
+{
+    internal SecretReference Reference => new(Provider, Path);
+}
+
 internal sealed record TransformInput(
     string ComposeYaml,
     IReadOnlyDictionary<string, string> EnvValues,
     IReadOnlyDictionary<string, string> SecretValues,
     bool DeployDashboard,
-    IReadOnlyDictionary<string, CaravanaServiceSettings> Services
+    IReadOnlyDictionary<string, CaravanaServiceSettings> Services,
+    IReadOnlyList<ProviderSecret>? ProviderSecrets = null
 );
 
 internal sealed record TransformResult(
@@ -99,12 +109,19 @@ internal static partial class CaravanaComposeTransformer
             return Failed("The Compose file has no 'services'.");
 
         // 1. Variables.
+        // A provider secret's variable is always its sentinel: whatever else says the parameter has a value
+        // (a stale .env, a typed secret of the same name) is never read, so it can't reach the request.
+        var providers = input.ProviderSecrets ?? [];
+        var providerKeys = providers.Select(p => CaravanaDeployer.EnvName(p.ParameterName)).ToHashSet(StringComparer.Ordinal);
+
         var variables = new Dictionary<string, string>(input.EnvValues, StringComparer.Ordinal);
         foreach (var (key, value) in input.SecretValues)
         {
-            if (!string.IsNullOrEmpty(value))
+            if (!string.IsNullOrEmpty(value) && !providerKeys.Contains(key))
                 variables[key] = value;
         }
+        foreach (var provider in providers)
+            variables[CaravanaDeployer.EnvName(provider.ParameterName)] = provider.Sentinel;
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         Substitute(root, variables, missing);
         foreach (var name in missing)
@@ -172,7 +189,7 @@ internal static partial class CaravanaComposeTransformer
 
         // 4. Secrets: move every environment entry that holds a secret's value to the overlay.
         var secretValues = input
-            .SecretValues.Where(kv => !string.IsNullOrEmpty(kv.Value))
+            .SecretValues.Where(kv => !string.IsNullOrEmpty(kv.Value) && !providerKeys.Contains(kv.Key))
             .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
         var overlay = new Dictionary<string, ComposeOverlay>(StringComparer.Ordinal);
         var movedSecrets = new Dictionary<string, List<OverlaySecret>>(StringComparer.Ordinal);
@@ -181,9 +198,21 @@ internal static partial class CaravanaComposeTransformer
         {
             if (node is not YamlMappingNode svc)
                 continue;
-            var moved = MoveSecrets(svcName, svc, secretValues, errors);
+            var moved = MoveSecrets(svcName, svc, secretValues, providers, errors);
             if (moved.Count > 0)
                 movedSecrets[svcName] = moved;
+        }
+
+        // A provider secret's stand-in anywhere else (a command, a label, a key) would be sent as it is.
+        foreach (var provider in providers)
+        {
+            var where = FindScalar(root, "", provider.Sentinel);
+            if (where is not null)
+                errors.Add(
+                    $"Provider secret parameter '{provider.ParameterName}' appears in {where}. Caravana reads a secret from "
+                        + "a provider into an environment variable, so it can only be an environment variable's value, "
+                        + "whole or inside a longer value: not part of a command, label or other field."
+                );
         }
 
         // A secret in a command, a label or any other field would be sent in the clear.
@@ -226,7 +255,23 @@ internal static partial class CaravanaComposeTransformer
         if (errors.Count > 0)
             return new TransformResult(null, overlay, errors, warnings);
 
-        return new TransformResult(Serialize(stream), overlay, errors, warnings);
+        // The last line of defence: no stand-in value may be in what is sent, whatever the steps above did.
+        var serialized = Serialize(stream);
+        if (providers.Count > 0)
+        {
+            var overlayJson = System.Text.Json.JsonSerializer.Serialize(overlay, CaravanaJson.Options);
+            foreach (var provider in providers)
+            {
+                if (serialized.Contains(provider.Sentinel, StringComparison.Ordinal))
+                    errors.Add($"Provider secret parameter '{provider.ParameterName}' is still in the Compose file after the transform. Nothing was sent.");
+                if (overlayJson.Contains(provider.Sentinel, StringComparison.Ordinal))
+                    errors.Add($"Provider secret parameter '{provider.ParameterName}' is still in the overlay after the transform. Nothing was sent.");
+            }
+            if (errors.Count > 0)
+                return new TransformResult(null, overlay, errors, warnings);
+        }
+
+        return new TransformResult(serialized, overlay, errors, warnings);
 
         TransformResult Failed(string error) =>
             new(null, new Dictionary<string, ComposeOverlay>(), [error], warnings);
@@ -442,34 +487,153 @@ internal static partial class CaravanaComposeTransformer
 
     // ── 4. Secrets ───────────────────────────────────────────────────────────
 
-    private static bool HoldsSecret(string escaped, IReadOnlyDictionary<string, string> secrets)
+    private static bool HoldsSecretValue(string value, IReadOnlyDictionary<string, string> secrets) =>
+        secrets.Values.Any(s => value == s || (s.Length >= MinSubstringSecretLength && value.Contains(s, StringComparison.Ordinal)));
+
+    // Caravana's limits on one secret's template (research of Caravana feature 053).
+    private const int MaxTemplateRefs = 16;
+    private const int MaxTemplateBytes = 4096;
+    private const int MaxRefNameLength = 64;
+
+    [GeneratedRegex(@"[^A-Za-z0-9_]")]
+    private static partial Regex InvalidRefNameChars();
+
+    /// <summary>
+    /// <c>Host=db;Password=SENTINEL</c> becomes <c>Host=db;Password=${db_password}</c> with a ref for each parameter.
+    /// The text around the stand-ins is literal, so each of its dollar signs is written <c>$$</c>.
+    /// </summary>
+    private static OverlaySecret? BuildTemplate(
+        string serviceName,
+        string key,
+        string value,
+        IReadOnlyList<ProviderSecret> found,
+        List<string> errors
+    )
     {
-        var value = Unescape(escaped);
-        return secrets.Values.Any(s => value == s || (s.Length >= MinSubstringSecretLength && value.Contains(s, StringComparison.Ordinal)));
+        var refNames = new Dictionary<string, string>(StringComparer.Ordinal); // parameter name -> ref name
+        var refs = new Dictionary<string, SecretReference>(StringComparer.Ordinal);
+        var template = new StringBuilder();
+
+        var pattern = new Regex(
+            string.Join("|", found.OrderByDescending(p => p.Sentinel.Length).Select(p => Regex.Escape(p.Sentinel))),
+            RegexOptions.CultureInvariant
+        );
+        var position = 0;
+        foreach (var match in pattern.Matches(value).Cast<Match>())
+        {
+            template.Append(value[position..match.Index].Replace("$", "$$", StringComparison.Ordinal));
+            var provider = found.First(p => p.Sentinel == match.Value);
+            if (!refNames.TryGetValue(provider.ParameterName, out var refName))
+            {
+                refName = RefName(provider.ParameterName, refs.Keys);
+                refNames[provider.ParameterName] = refName;
+                refs[refName] = provider.Reference;
+            }
+            template.Append("${").Append(refName).Append('}');
+            position = match.Index + match.Length;
+        }
+        template.Append(value[position..].Replace("$", "$$", StringComparison.Ordinal));
+
+        var where = $"Environment variable '{key}' of service '{serviceName}'";
+        if (refs.Count > MaxTemplateRefs)
+        {
+            errors.Add($"{where} uses {refs.Count} provider secrets: Caravana allows {MaxTemplateRefs} in one value.");
+            return null;
+        }
+        if (Encoding.UTF8.GetByteCount(template.ToString()) > MaxTemplateBytes)
+        {
+            errors.Add($"{where} is longer than the {MaxTemplateBytes} bytes Caravana allows for a value that holds provider secrets.");
+            return null;
+        }
+        return OverlaySecret.FromTemplate(key, template.ToString(), refs);
+    }
+
+    /// <summary>
+    /// A ref name for a parameter: its name with every character that isn't a letter, digit or '_' made '_', not
+    /// starting with a digit, at most 64 characters, and not already taken in this secret.
+    /// </summary>
+    internal static string RefName(string parameterName, IEnumerable<string> taken)
+    {
+        var name = InvalidRefNameChars().Replace(parameterName, "_");
+        if (name.Length == 0 || char.IsAsciiDigit(name[0]))
+            name = "_" + name;
+        if (name.Length > MaxRefNameLength)
+            name = name[..MaxRefNameLength];
+
+        var used = taken.ToHashSet(StringComparer.Ordinal);
+        var candidate = name;
+        for (var n = 2; used.Contains(candidate); n++)
+        {
+            var suffix = $"_{n}";
+            candidate = name[..Math.Min(name.Length, MaxRefNameLength - suffix.Length)] + suffix;
+        }
+        return candidate;
     }
 
     private static List<OverlaySecret> MoveSecrets(
         string serviceName,
         YamlMappingNode service,
         IReadOnlyDictionary<string, string> secrets,
+        IReadOnlyList<ProviderSecret> providers,
         List<string> errors
     )
     {
         var moved = new List<OverlaySecret>();
-        if (secrets.Count == 0)
+        if (secrets.Count == 0 && providers.Count == 0)
             return moved;
 
-        void Move(string key, string value)
+        bool ValidName(string key)
         {
-            if (!SecretNamePattern().IsMatch(key))
+            if (SecretNamePattern().IsMatch(key))
+                return true;
+            errors.Add(
+                $"Environment variable '{key}' of service '{serviceName}' holds a secret, but its name is not a "
+                    + "valid Caravana secret name (letters, digits and '_', not starting with a digit)."
+            );
+            return false;
+        }
+
+        // True when the entry holds a secret (and so leaves the file, even when it can't be sent).
+        bool Move(string key, string escaped)
+        {
+            var value = Unescape(escaped);
+            var found = providers.Where(p => value.Contains(p.Sentinel, StringComparison.Ordinal)).ToList();
+            if (found.Count > 0)
             {
-                errors.Add(
-                    $"Environment variable '{key}' of service '{serviceName}' holds a secret, but its name is not a "
-                        + "valid Caravana secret name (letters, digits and '_', not starting with a digit)."
-                );
-                return;
+                // The stand-ins are cut out first, so what is left is only the text around them.
+                var rest = value;
+                foreach (var provider in found)
+                    rest = rest.Replace(provider.Sentinel, "\0", StringComparison.Ordinal);
+                if (HoldsSecretValue(rest, secrets))
+                {
+                    errors.Add(
+                        $"Environment variable '{key}' of service '{serviceName}' mixes a provider secret ("
+                            + string.Join(", ", found.Select(p => $"'{p.ParameterName}'"))
+                            + ") with a typed secret in one value: Caravana can't make one secret from both. "
+                            + "Make every secret in it a provider secret, or give the typed one its own environment variable."
+                    );
+                    return true;
+                }
+
+                if (!ValidName(key))
+                    return true;
+
+                if (found.Count == 1 && value == found[0].Sentinel)
+                {
+                    moved.Add(OverlaySecret.FromProvider(key, found[0].Reference));
+                    return true;
+                }
+
+                if (BuildTemplate(serviceName, key, value, found, errors) is { } template)
+                    moved.Add(template);
+                return true;
             }
-            moved.Add(new OverlaySecret(key, Unescape(value)));
+
+            if (!HoldsSecretValue(value, secrets))
+                return false;
+            if (ValidName(key))
+                moved.Add(new OverlaySecret(key, value));
+            return true;
         }
 
         switch (Get(service, "environment"))
@@ -477,11 +641,8 @@ internal static partial class CaravanaComposeTransformer
             case YamlMappingNode env:
                 foreach (var (key, value) in env.Children.ToList())
                 {
-                    if (value is YamlScalarNode { Value: { } text } && HoldsSecret(text, secrets))
-                    {
-                        Move(Name(key), text);
+                    if (value is YamlScalarNode { Value: { } text } && Move(Name(key), text))
                         env.Children.Remove(key);
-                    }
                 }
                 if (env.Children.Count == 0)
                     service.Children.Remove(new YamlScalarNode("environment"));
@@ -493,11 +654,8 @@ internal static partial class CaravanaComposeTransformer
                     if (item is not YamlScalarNode { Value: { } line })
                         continue;
                     var eq = line.IndexOf('=');
-                    if (eq > 0 && HoldsSecret(line[(eq + 1)..], secrets))
-                    {
-                        Move(line[..eq], line[(eq + 1)..]);
+                    if (eq > 0 && Move(line[..eq], line[(eq + 1)..]))
                         list.Children.Remove(item);
-                    }
                 }
                 if (list.Children.Count == 0)
                     service.Children.Remove(new YamlScalarNode("environment"));

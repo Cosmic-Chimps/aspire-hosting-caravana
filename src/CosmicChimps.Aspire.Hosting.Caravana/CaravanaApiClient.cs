@@ -59,6 +59,20 @@ internal sealed class CaravanaApiClient(HttpClient http, string token, SecretRed
 
     private static readonly IReadOnlyDictionary<string, string> NoHeaders = new Dictionary<string, string>();
 
+    /// <summary>
+    /// <c>GET /v1/health</c>: the running Caravana's version (<c>0.22.0</c>; <c>dev</c> for a build without one).
+    /// Null when the answer has none.
+    /// </summary>
+    internal async Task<string?> GetVersionAsync(CancellationToken ct)
+    {
+        using var response = await SendAsync(HttpMethod.Get, "/v1/health", null, NoHeaders, ct);
+        await EnsureSuccessAsync(response, ct);
+        using var doc = await ReadJsonAsync(response, ct);
+        return doc.RootElement.TryGetProperty("version", out var version) && version.ValueKind == JsonValueKind.String
+            ? version.GetString()
+            : null;
+    }
+
     internal async Task<ProjectInfo?> GetProjectAsync(string project, CancellationToken ct)
     {
         using var response = await SendAsync(HttpMethod.Get, $"/v1/projects/{Uri.EscapeDataString(project)}", null, NoHeaders, ct);
