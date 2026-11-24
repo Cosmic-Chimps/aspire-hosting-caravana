@@ -12,6 +12,8 @@ release renames it.
 
 ## Unreleased
 
+## 13.6.6 - 2026-11-24
+
 ### Added
 - `AsCaravanaProviderSecret(provider, path)` on a parameter: the secret stays in a Caravana secret provider
   (Bella Baxter) and the publisher sends a reference, never a value. An environment value that is the parameter
